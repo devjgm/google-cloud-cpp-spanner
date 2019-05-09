@@ -11,8 +11,7 @@
 //                  via their position and/or column name.
 //
 // * spanner::Key - A range of cell values for the columns in the "index".
-// * spanner::KeyRange - An open/closed range of Keys
-// * spanner::KeySet - A collection of Keys and KeyRanges
+// * spanner::KeySet - A collection of Keys and KeyRanges for an index.
 //
 // * spanner::DatabaseClient - Represents a connection to a Spanner database.
 //                             This class only has a Read() method currently.
@@ -23,10 +22,6 @@
 // Look at the main() function at the bottom to see what the usage looks like.
 //
 // NOTES:
-// * Often using-aliases were used in this file to keep this sketch code
-//   minimal. Real implementations would likely be real classes rather than
-//   aliases.
-//
 // * This file relies on C++17 only because of std::variant (and its friends).
 //   We could get this from Abseil, or implement it ourselves.
 //

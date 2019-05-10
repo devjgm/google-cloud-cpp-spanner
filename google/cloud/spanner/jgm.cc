@@ -228,9 +228,9 @@ class Transaction {
 
  private:
   friend class Client;
-  friend StatusOr<std::string> SerializeTransaction(Client&, Transaction);
-  friend StatusOr<std::pair<Client, Transaction>> DeserializeTransaction(
-      std::string);
+  friend std::string SerializeTransaction(Transaction);
+  friend StatusOr<Transaction> DeserializeTransaction(std::string);
+  friend StatusOr<Client> MakeClient(Transaction);
 
   // Private default c'tor; represents single-use transaction
   Transaction() = default;
@@ -243,15 +243,19 @@ class Transaction {
 // Represents a connection to a Spanner database.
 class Client {
  public:
+  // move-only
+  Client(Client&&) = default;
+  Client& operator=(Client&&) = default;
+
   // TODO: Add support for read-only transaction options.
   Transaction StartReadOnlyTransaction() {
     // TODO: Call Spanner's BeginTransaction() rpc.
-    return Transaction("dummy-session-read-only", "dummy-id");
+    return Transaction("dummy-session", "dummy-read-only");
   }
 
   Transaction StartReadWriteTransaction() {
     // TODO: Call Spanner's BeginTransaction() rpc.
-    return Transaction("dummy-session-read-write", "dummy-id");
+    return Transaction("dummy-session", "dummy-read-write");
   }
 
   // TODO: Support DML transactions
@@ -285,31 +289,45 @@ class Client {
 
   // TODO: Implement other methods, like ExecuteSql()
  private:
-  friend StatusOr<Client> MakeDefaultClient();
-  Client() = default;
+  friend StatusOr<Client> MakeClient(std::map<std::string, std::string>);
+  friend StatusOr<Client> MakeClient(Transaction txn);
+  Client(Client const&) = delete;
+  Client& operator=(Client const&) = delete;
+  Client(std::map<std::string, std::string> labels)
+      : labels_{std::move(labels)} {}
+  Client(std::string session, std::map<std::string, std::string> labels)
+      : sessions_{std::move(session)}, labels_{std::move(labels)} {}
+
+  std::vector<std::string> sessions_;
+  std::map<std::string, std::string> labels_;
 };
 
-StatusOr<Client> MakeDefaultClient() {
-  // TODO: Make a connection to Spanner, set up stubs, create Session, etc.
-  return Client();
+StatusOr<Client> MakeClient(std::map<std::string, std::string> labels = {}) {
+  // TODO: Make a connection to Spanner, set up stubs, etc.
+  return Client(std::move(labels));
 }
 
-StatusOr<std::string> SerializeTransaction(Client& client, Transaction txn) {
+StatusOr<Client> MakeClient(Transaction txn) {
+  // TODO: Call rpc.GetSession() using txn.session_ to get labels
+  std::map<std::string, std::string> labels = {};
+  return Client(std::move(txn.session_), std::move(labels));
+}
+
+std::string SerializeTransaction(Transaction txn) {
   // TODO: Use proto or something better to serialize
   return txn.session_ + "/" + txn.id_;
 }
 
-StatusOr<std::pair<Client, Transaction>> DeserializeTransaction(std::string s) {
-  // TODO: Deserialize properly.
-  auto sc = MakeDefaultClient();
-  if (!sc) return std::nullopt;  // XXX: Return the failed Status
-  return {{*std::move(sc), Transaction()}};
+StatusOr<Transaction> DeserializeTransaction(std::string s) {
+  // TODO: Properly deserialize.
+  return {Transaction()};
 }
 
 }  // namespace spanner
 
 int main() {
-  StatusOr<spanner::Client> sc = spanner::MakeDefaultClient();
+  StatusOr<spanner::Client> sc =
+      spanner::MakeClient({{"label_key", "label_val"}});
   if (!sc) return 1;
 
   spanner::KeySet keys("index2");
@@ -319,6 +337,11 @@ int main() {
   std::vector<std::string> const columns = {"A", "B", "C", "D", "E"};
 
   spanner::Transaction txn = sc->StartReadOnlyTransaction();
+
+  // Demonstrate serializing and deserializing a Transaction
+  std::string data = spanner::SerializeTransaction(txn);
+  StatusOr<spanner::Transaction> txn2 = spanner::DeserializeTransaction(data);
+  /* assert(txn == txn2); */
 
   for (StatusOr<spanner::Row>& row :
        sc->Read(txn, table, std::move(keys), columns)) {

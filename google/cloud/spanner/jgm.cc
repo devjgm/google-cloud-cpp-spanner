@@ -13,10 +13,10 @@
 // * spanner::Key - A range of cell values for the columns in the "index".
 // * spanner::KeySet - A collection of Keys and KeyRanges for an index.
 //
-// * spanner::DatabaseClient - Represents a connection to a Spanner database.
-//                             This class only has a Read() method currently.
-//                             This one Read() method implements both streaming
-//                             and non-streaming reads.
+// * spanner::Client - Represents a connection to a Spanner database.
+//                     This class only has a Read() method currently. This one
+//                     Read() method implements both streaming and
+//                     non-streaming reads.
 // * spanner::ReadStream - A "stream" of spanner::Rows.
 //
 // Look at the main() function at the bottom to see what the usage looks like.
@@ -186,7 +186,7 @@ class KeySet {
 };
 
 // Represents a stream of Row objects. Actually, a stream of StatusOr<Row>.
-// This will be returned from the DatabaseClient::Read() function.
+// This will be returned from the Client::Read() function.
 // TODO: Implement a real stream, not just a vector, like we have here.
 class ReadStream {
  public:
@@ -207,13 +207,59 @@ class ReadStream {
   std::vector<value_type> v_;
 };
 
-// Represents a connection to a Spanner database.
-class DatabaseClient {
+class Client;  // Used below in Transaction's friend declarations.
+
+// Represents a Spanner transaction. All transaction types (read-only,
+// read-write, etc.) are represented by the same Transaction type. Callers
+// create different types of Transaction via factory functions in the Client
+// class, e.g., `Transaction txn = client.StartReadOnlyTransaction()`.
+class Transaction {
  public:
+  // Value type.
+  // No default c'tor, but defaulted copy, assign, move, etc.
+  // XXX: Is there any public API for users?
+
+  friend bool operator==(Transaction const& a, Transaction const& b) {
+    return a.session_ == b.session_ && a.id_ == b.id_;
+  }
+  friend bool operator!=(Transaction const& a, Transaction const& b) {
+    return !(a == b);
+  }
+
+ private:
+  friend class Client;
+  friend StatusOr<std::string> SerializeTransaction(Client&, Transaction);
+  friend StatusOr<std::pair<Client, Transaction>> DeserializeTransaction(
+      std::string);
+
+  // Private default c'tor; represents single-use transaction
+  Transaction() = default;
+  explicit Transaction(std::string session, std::string id)
+      : session_(std::move(session)), id_(std::move(id)) {}
+  std::string session_;
+  std::string id_;
+};
+
+// Represents a connection to a Spanner database.
+class Client {
+ public:
+  // TODO: Add support for read-only transaction options.
+  Transaction StartReadOnlyTransaction() {
+    // TODO: Call Spanner's BeginTransaction() rpc.
+    return Transaction("dummy-session-read-only", "dummy-id");
+  }
+
+  Transaction StartReadWriteTransaction() {
+    // TODO: Call Spanner's BeginTransaction() rpc.
+    return Transaction("dummy-session-read-write", "dummy-id");
+  }
+
+  // TODO: Support DML transactions
+
   // Reads the columns for the given keys from the specified table. Returns a
   // stream of Rows.
   // TODO: Add support for "limit" integer.
-  ReadStream Read(std::string table, KeySet keys,
+  ReadStream Read(Transaction txn, std::string table, KeySet keys,
                   std::vector<std::string> columns) {
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -229,13 +275,42 @@ class DatabaseClient {
     return ReadStream(v);
   }
 
+  // Same as Read() above, but implicitly uses a single-use Transaction.
+  ReadStream Read(std::string table, KeySet keys,
+                  std::vector<std::string> columns) {
+    auto single_use = Transaction();  // XXX: Some indication of single-use txn
+    return Read(std::move(single_use), std::move(table), std::move(keys),
+                std::move(columns));
+  }
+
   // TODO: Implement other methods, like ExecuteSql()
+ private:
+  friend StatusOr<Client> MakeDefaultClient();
+  Client() = default;
 };
+
+StatusOr<Client> MakeDefaultClient() {
+  // TODO: Make a connection to Spanner, set up stubs, create Session, etc.
+  return Client();
+}
+
+StatusOr<std::string> SerializeTransaction(Client& client, Transaction txn) {
+  // TODO: Use proto or something better to serialize
+  return txn.session_ + "/" + txn.id_;
+}
+
+StatusOr<std::pair<Client, Transaction>> DeserializeTransaction(std::string s) {
+  // TODO: Deserialize properly.
+  auto sc = MakeDefaultClient();
+  if (!sc) return std::nullopt;  // XXX: Return the failed Status
+  return {{*std::move(sc), Transaction()}};
+}
 
 }  // namespace spanner
 
 int main() {
-  spanner::DatabaseClient db;  // XXX: Use some factory to create instances.
+  StatusOr<spanner::Client> sc = spanner::MakeDefaultClient();
+  if (!sc) return 1;
 
   spanner::KeySet keys("index2");
   keys.Add(spanner::Key(1.0, true, "hello"));
@@ -243,7 +318,10 @@ int main() {
   std::string const table = "MyTable";
   std::vector<std::string> const columns = {"A", "B", "C", "D", "E"};
 
-  for (StatusOr<spanner::Row>& row : db.Read(table, std::move(keys), columns)) {
+  spanner::Transaction txn = sc->StartReadOnlyTransaction();
+
+  for (StatusOr<spanner::Row>& row :
+       sc->Read(txn, table, std::move(keys), columns)) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?

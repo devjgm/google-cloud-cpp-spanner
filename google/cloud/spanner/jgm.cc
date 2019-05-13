@@ -190,6 +190,7 @@ class Key {
 //       Maybe op+, op+=, etc?
 class KeySet {
  public:
+  KeySet() = default;  // uses the primary index.
   explicit KeySet(std::string index_name) : index_(std::move(index_name)) {}
 
   void Add(Key key) { keys.push_back(std::move(key)); }
@@ -197,6 +198,10 @@ class KeySet {
  private:
   std::string index_;
   std::vector<Key> keys;
+};
+
+class ResultStats {
+  // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXxxxxxx
 };
 
 // Represents a stream of Row objects. Actually, a stream of StatusOr<Row>.
@@ -208,6 +213,7 @@ class ResultStream {
   using iterator = std::vector<value_type>::iterator;
   using const_iterator = std::vector<value_type>::const_iterator;
 
+  ResultStream() = default;
   explicit ResultStream(std::vector<Row> v) {
     for (auto&& e : v) v_.emplace_back(e);
   }
@@ -217,7 +223,10 @@ class ResultStream {
   const_iterator begin() const { return v_.begin(); }
   const_iterator end() const { return v_.end(); }
 
-  // TODO: Add some accessors for the ResultSetStats from the proto.
+  // XXX: Can only be called after consuming the whole stream.
+  std::optional<ResultStats> stats() const {
+    return {};
+  }
 
  private:
   std::vector<value_type> v_;
@@ -226,13 +235,13 @@ class ResultStream {
 // Represents an SQL statement with optional parameters. Parameter placeholders
 // may be specified in the sql string using `@` followed by the parameter name.
 // ... follow Spanner's docs about this.
-class Sql {
+class SqlStatement {
  public:
   // XXX: Can/should we re-use Cell here? It could be made more generic so
   // that it's column attribute is just a generic "name", not necessarily a
   // column?
   using param_type = std::vector<Cell>;
-  explicit Sql(std::string sql, param_type params)
+  explicit SqlStatement(std::string sql, param_type params)
       : sql_(std::move(sql)), params_(std::move(params)) {}
 
   std::string sql() const { return sql_; }
@@ -272,6 +281,7 @@ class Transaction {
   Transaction() = default;
   explicit Transaction(std::string session, std::string id)
       : session_(std::move(session)), id_(std::move(id)) {}
+
   std::string session_;
   std::string id_;
 };
@@ -292,6 +302,31 @@ class Mutation {
   // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXxxxxx
 };
 
+// The options passed to PartitionRead() and PartitionQuery().
+struct PartitionOptions {
+  int64_t partition_size_bytes;  // currently ignored
+  int64_t max_partitions;        // currently ignored
+};
+
+class ReadPartition {
+ public:
+  // ...
+ private:
+   std::string token_;
+   Transaction tx_;
+   std::string table_;
+   KeySet keys_;
+   std::vector<std::string> columns_;
+};
+
+class QueryPartition {
+ public:
+  // ...
+ private:
+   std::string token_;
+   Transaction tx_;
+   SqlStatement statement_;
+};
 
 // Represents a connection to a Spanner database.
 class Client {
@@ -322,6 +357,7 @@ class Client {
   }
 
   // Note: These transactions can only be used with ExecuteSql() (I think).
+  // I *think* this has nothing to do with other "partitioned" methods.
   StatusOr<Transaction> StartPartitionedDmlTransaction() {
     // TODO: Call Spanner's BeginTransaction() rpc.
     static int64_t id = 0;
@@ -376,16 +412,16 @@ class Client {
                 std::move(columns));
   }
 
-  struct PartitionOptions {
-    int64_t partition_size_bytes;  // currently ignored
-    int64_t max_partitions;        // currently ignored
-  };
-
-  // NOTE: Requires a read-only transaction
-  StatusOr<std::vector<std::string>> PartitionRead(
+  // NOTE: Requires a read-only or lazy transaction
+  StatusOr<std::vector<ReadPartition>> PartitionRead(
       Transaction tx, std::string table, KeySet keys,
       std::vector<std::string> columns, PartitionOptions opts = {}) {
     // TODO: Call Spanner's PartitionRead() RPC.
+    return {};
+  }
+
+  ResultStream Read(ReadPartition partition) {
+    // TODO: Call Spanner's StreamingRead RPC with the data in `partition`.
     return {};
   }
 
@@ -395,7 +431,7 @@ class Client {
 
   // TODO: Add support for QueryMode
   // TODO: Add support for "partition" token.
-  ResultStream ExecuteSql(Transaction tx, Sql statement) {
+  ResultStream ExecuteSql(Transaction tx, SqlStatement statement) {
     auto columns = {"col1", "col2", "col3"};
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -413,15 +449,20 @@ class Client {
     return ResultStream(v);
   }
 
-  ResultStream ExecuteSql(Sql statement) {
+  ResultStream ExecuteSql(SqlStatement statement) {
     auto single_use = Transaction();  // XXX: Some indication of single-use tx
     return ExecuteSql(std::move(single_use), std::move(statement));
   }
 
-  // NOTE: Requires a read-only transaction
-  StatusOr<std::vector<std::string>> PartitionQuery(
-      Transaction tx, Sql statement, PartitionOptions opts = {}) {
+  // NOTE: Requires a read-only or lazy transaction
+  StatusOr<std::vector<QueryPartition>> PartitionQuery(
+      Transaction tx, SqlStatement statement, PartitionOptions opts = {}) {
     // TODO: Call Spanner's PartitionRead() RPC.
+    return {};
+  }
+
+  ResultStream Query(QueryPartition partition) {
+    // TODO: Call Spanner's StreamingExecuteSql RPC with the data in `partition`.
     return {};
   }
 
@@ -430,9 +471,9 @@ class Client {
   //
 
   // Note: Does not support single-use transactions, so no overload for that.
-  using ResultSet = std::vector<Row>;
-  StatusOr<std::vector<ResultSet>> ExecuteBatchDml(
-      Transaction tx, std::vector<Sql> statements) {
+  // Note: statements.size() == result.size()
+  std::vector<StatusOr<ResultStats>> ExecuteBatchDml(
+      Transaction tx, std::vector<SqlStatement> statements) {
     // TODO: Call spanner's ExecuteBatchDml RPC.
     return {};
   }
@@ -448,6 +489,7 @@ class Client {
 
   std::vector<std::string> sessions_;
   std::map<std::string, std::string> labels_;
+  // grpc stubs.
 };
 
 StatusOr<Client> MakeClient(std::map<std::string, std::string> labels = {}) {
@@ -484,7 +526,10 @@ int main() {
   assert(*tx == *tx2);
   std::cout << "Using serialized transaction: " << data << "\n";
 
+  StatusOr<spanner::Client> sc2 = spanner::MakeClient(*tx2);
+
   // Uses Client::Read().
+  std::cout << "\n# Using Client::Read()...\n";
   for (StatusOr<spanner::Row>& row :
        sc->Read(*tx, table, std::move(keys), columns)) {
     if (!row) {
@@ -518,8 +563,8 @@ int main() {
   }
 
   // Uses Client::ExecuteSql().
-  std::cout << "Exeucting SQL...\n";
-  spanner::Sql sql(
+  std::cout << "\n# Using Client::ExecuteSql()...\n";
+  spanner::SqlStatement sql(
       "select * from Mytable where id > @msg_id and name like @name",
       {spanner::Cell("msg_id", int64_t{123}),
        spanner::Cell("name", std::string("sally"))});
@@ -543,6 +588,7 @@ int main() {
     }
   }
 
-  sc->Rollback(*tx);
+  Status s = sc->Rollback(*tx);
+  // assert(s)
 }
 

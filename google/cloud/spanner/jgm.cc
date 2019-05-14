@@ -33,6 +33,8 @@
 //   for users but always calls the StreamingRead() RPC. Is this OK, or is
 //   there a performance reason that we might need to use the non-streaming
 //   Read() RPC? Same Q for ExecuteSql().
+// * We plan to have all of our transactions be the "implicit" type. Is that
+//   fine?
 //
 #include <cassert>
 #include <chrono>
@@ -185,19 +187,25 @@ class Key {
 // and (TODO) key ranges for the specified index.
 //
 // TODO: Add support for key ranges as well.
-// TODO: Add support for "all"
 // TODO: Do we want some fancy syntax to build key sets and ranges nicely?
 //       Maybe op+, op+=, etc?
 class KeySet {
  public:
+  static KeySet All() { return KeySet(all_tag{}); }
+
   KeySet() = default;  // uses the primary index.
   explicit KeySet(std::string index_name) : index_(std::move(index_name)) {}
 
   void Add(Key key) { keys.push_back(std::move(key)); }
+  void Limit(int limit) { limit_ = limit; }
 
  private:
+  struct all_tag {};
+  explicit KeySet(all_tag) : all_(true) {}
   std::string index_;
   std::vector<Key> keys;
+  bool all_ = false;
+  std::optional<int> limit_;
 };
 
 class ResultStats {
@@ -206,7 +214,6 @@ class ResultStats {
 
 // Represents a stream of Row objects. Actually, a stream of StatusOr<Row>.
 // This will be returned from the Client::Read() function.
-// TODO: Implement a real stream, not just a vector, like we have here.
 class ResultStream {
  public:
   using value_type = StatusOr<Row>;
@@ -224,9 +231,7 @@ class ResultStream {
   const_iterator end() const { return v_.end(); }
 
   // XXX: Can only be called after consuming the whole stream.
-  std::optional<ResultStats> stats() const {
-    return {};
-  }
+  std::optional<ResultStats> stats() const { return {}; }
 
  private:
   std::vector<value_type> v_;
@@ -252,20 +257,22 @@ class SqlStatement {
   param_type params_;
 };
 
-class Client;  // Used below in Transaction's friend declarations.
-
-// Represents a Spanner transaction. All transaction types (read-only,
-// read-write, etc.) are represented by the same Transaction type. Callers
-// create different types of Transaction via factory functions in the Client
-// class, e.g., `Transaction tx = client.StartReadOnlyTransaction()`.
 class Transaction {
  public:
+  struct ReadOnlyOptions {
+    // ...
+  };
+  struct ReadWriteOptions {
+    // ...
+  };
+  struct PartitionedDmlOptions {
+    // ...
+  };
   // Value type.
   // No default c'tor, but defaulted copy, assign, move, etc.
-  // XXX: Is there any public API for users?
 
   friend bool operator==(Transaction const& a, Transaction const& b) {
-    return a.session_ == b.session_ && a.id_ == b.id_;
+    return a.impl_ == b.impl_;
   }
   friend bool operator!=(Transaction const& a, Transaction const& b) {
     return !(a == b);
@@ -273,34 +280,63 @@ class Transaction {
 
  private:
   friend class Client;
-  friend std::string SerializeTransaction(Transaction);
   friend StatusOr<Transaction> DeserializeTransaction(std::string);
-  friend StatusOr<Client> MakeClient(Transaction);
+  friend std::string SerializeTransaction(Transaction);
+  friend Transaction MakeReadOnlyTransaction(Transaction::ReadOnlyOptions);
+  friend Transaction MakeReadWriteTransaction(Transaction::ReadWriteOptions);
+  friend Transaction MakePartitionedDmlTransaction(
+      Transaction::PartitionedDmlOptions);
 
-  // Private default c'tor; represents single-use transaction
-  Transaction() = default;
-  explicit Transaction(std::string session, std::string id)
-      : session_(std::move(session)), id_(std::move(id)) {}
+  static Transaction MakeSingleUseTransaction() {
+    return Transaction(SingleUse{});
+  }
 
-  std::string session_;
-  std::string id_;
+  struct SingleUse {};
+  explicit Transaction(SingleUse){};
+  explicit Transaction(ReadOnlyOptions opts) {}
+  explicit Transaction(ReadWriteOptions opts) {}
+  explicit Transaction(PartitionedDmlOptions opts) {}
+
+  class Impl;
+  std::shared_ptr<Impl> impl_;
 };
+
+Transaction MakeReadOnlyTransaction(Transaction::ReadOnlyOptions opts = {}) {
+  return Transaction(opts);
+}
+
+Transaction MakeReadWriteTransaction(Transaction::ReadWriteOptions opts = {}) {
+  return Transaction(opts);
+}
+
+Transaction MakePartitionedDmlTransaction(
+    Transaction::PartitionedDmlOptions opts = {}) {
+  return Transaction(opts);
+}
 
 std::string SerializeTransaction(Transaction tx) {
   // TODO: Use proto or something better to serialize
-  return tx.session_ + "/" + tx.id_;
+  return {};
 }
 
 StatusOr<Transaction> DeserializeTransaction(std::string s) {
   // TODO: Properly deserialize.
-  auto pos = s.find('/');
-  if (pos == std::string::npos) return std::nullopt;
-  return Transaction(s.substr(0, pos), s.substr(pos + 1));
+  return Transaction(Transaction::ReadOnlyOptions{});
 }
 
 class Mutation {
-  // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXxxxxx
+ public:
+  // value type, ==, !=
+
+ private:
+  // Holds a google::spanner::v1::Mutation proto
 };
+
+Mutation MakeInsertMutation() { return {}; }
+Mutation MakeUpdateMutation() { return {}; }
+Mutation MakeInsertOrUpdateMutation() { return {}; }
+Mutation MakeReplaceMutation() { return {}; }
+Mutation MakeDeleteMutation() { return {}; }
 
 // The options passed to PartitionRead() and PartitionQuery().
 struct PartitionOptions {
@@ -310,23 +346,33 @@ struct PartitionOptions {
 
 class ReadPartition {
  public:
-  // ...
+  // Value type.
  private:
-   std::string token_;
-   Transaction tx_;
-   std::string table_;
-   KeySet keys_;
-   std::vector<std::string> columns_;
+  friend std::string SerializeReadPartition(ReadPartition p);
+  friend StatusOr<ReadPartition> DeserializeReadPartition(std::string s);
+  std::string token_;
+  Transaction tx_;
+  std::string table_;
+  KeySet keys_;
+  std::vector<std::string> columns_;
 };
+
+std::string SerializeReadPartition(ReadPartition p) { return p.token_; }
+StatusOr<ReadPartition> DeserializeReadPartition(std::string s) { return {}; }
 
 class QueryPartition {
  public:
-  // ...
+  // Value type.
  private:
-   std::string token_;
-   Transaction tx_;
-   SqlStatement statement_;
+  friend std::string SerializeQueryPartition(QueryPartition p);
+  friend StatusOr<QueryPartition> DeserializeQueryPartition(std::string s);
+  std::string token_;
+  Transaction tx_;
+  SqlStatement statement_;
 };
+
+std::string SerializeQueryPartition(QueryPartition p) { return p.token_; }
+StatusOr<QueryPartition> DeserializeQueryPartition(std::string s) { return {}; }
 
 // Represents a connection to a Spanner database.
 class Client {
@@ -341,34 +387,6 @@ class Client {
   // Transactions
   //
 
-  struct ReadOnlyOptions {
-    // ...
-  };
-  StatusOr<Transaction> StartReadOnlyTransaction(ReadOnlyOptions = {}) {
-    // TODO: Call Spanner's BeginTransaction() rpc.
-    static int64_t id = 0;
-    return Transaction("dummy-session", "read-only-" + std::to_string(id++));
-  }
-
-  StatusOr<Transaction> StartReadWriteTransaction() {
-    // TODO: Call Spanner's BeginTransaction() rpc.
-    static int64_t id = 0;
-    return Transaction("dummy-session", "read-write-" + std::to_string(id++));
-  }
-
-  // Note: These transactions can only be used with ExecuteSql() (I think).
-  // I *think* this has nothing to do with other "partitioned" methods.
-  StatusOr<Transaction> StartPartitionedDmlTransaction() {
-    // TODO: Call Spanner's BeginTransaction() rpc.
-    static int64_t id = 0;
-    return Transaction("dummy-session", "partitioned-dml-" + std::to_string(id++));
-  }
-
-  // QQQ: How do we support those "begin" transactions that are implicitly
-  // created on the first request and thus avoid an RPC to
-  // BeginTransaction()???
-
-  // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXxxxxx
   StatusOr<std::chrono::system_clock::time_point> Commit(
       Transaction tx, std::vector<Mutation> mutations) {
     // TODO: Call Spanner's Commit() rpc.
@@ -384,10 +402,17 @@ class Client {
   // Read()
   //
 
+  // NOTE: Requires a read-only transaction
+  StatusOr<std::vector<ReadPartition>> PartitionRead(
+      Transaction tx, std::string table, KeySet keys,
+      std::vector<std::string> columns, PartitionOptions opts = {}) {
+    // TODO: Call Spanner's PartitionRead() RPC.
+    return {};
+  }
+
   // Reads the columns for the given keys from the specified table. Returns a
   // stream of Rows.
   // TODO: Add support for "limit" integer.
-  // TODO: Add support for "partition" token.
   ResultStream Read(Transaction tx, std::string table, KeySet keys,
                     std::vector<std::string> columns) {
     // Fills in two rows of dummy data.
@@ -407,17 +432,9 @@ class Client {
   // Same as Read() above, but implicitly uses a single-use Transaction.
   ResultStream Read(std::string table, KeySet keys,
                     std::vector<std::string> columns) {
-    auto single_use = Transaction();  // XXX: Some indication of single-use tx
+    auto single_use = Transaction::MakeSingleUseTransaction();
     return Read(std::move(single_use), std::move(table), std::move(keys),
                 std::move(columns));
-  }
-
-  // NOTE: Requires a read-only or lazy transaction
-  StatusOr<std::vector<ReadPartition>> PartitionRead(
-      Transaction tx, std::string table, KeySet keys,
-      std::vector<std::string> columns, PartitionOptions opts = {}) {
-    // TODO: Call Spanner's PartitionRead() RPC.
-    return {};
   }
 
   ResultStream Read(ReadPartition partition) {
@@ -426,12 +443,11 @@ class Client {
   }
 
   //
-  // ExecuteSql
+  // Query
   //
 
   // TODO: Add support for QueryMode
-  // TODO: Add support for "partition" token.
-  ResultStream ExecuteSql(Transaction tx, SqlStatement statement) {
+  ResultStream Query(Transaction tx, SqlStatement statement) {
     auto columns = {"col1", "col2", "col3"};
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -449,12 +465,12 @@ class Client {
     return ResultStream(v);
   }
 
-  ResultStream ExecuteSql(SqlStatement statement) {
-    auto single_use = Transaction();  // XXX: Some indication of single-use tx
-    return ExecuteSql(std::move(single_use), std::move(statement));
+  ResultStream Query(SqlStatement statement) {
+    auto single_use = Transaction::MakeSingleUseTransaction();
+    return Query(std::move(single_use), std::move(statement));
   }
 
-  // NOTE: Requires a read-only or lazy transaction
+  // NOTE: Requires a read-only transaction
   StatusOr<std::vector<QueryPartition>> PartitionQuery(
       Transaction tx, SqlStatement statement, PartitionOptions opts = {}) {
     // TODO: Call Spanner's PartitionRead() RPC.
@@ -462,7 +478,8 @@ class Client {
   }
 
   ResultStream Query(QueryPartition partition) {
-    // TODO: Call Spanner's StreamingExecuteSql RPC with the data in `partition`.
+    // TODO: Call Spanner's StreamingExecuteSql RPC with the data in
+    // `partition`.
     return {};
   }
 
@@ -500,7 +517,8 @@ StatusOr<Client> MakeClient(std::map<std::string, std::string> labels = {}) {
 StatusOr<Client> MakeClient(Transaction tx) {
   // TODO: Call rpc.GetSession() using tx.session_ to get labels
   std::map<std::string, std::string> labels = {};
-  return Client(std::move(tx.session_), std::move(labels));
+  std::string session;  // TODO: Get this from tx
+  return Client(std::move(session), std::move(labels));
 }
 
 }  // namespace spanner
@@ -516,14 +534,13 @@ int main() {
   std::string const table = "MyTable";
   std::vector<std::string> const columns = {"A", "B", "C", "D", "E"};
 
-  StatusOr<spanner::Transaction> tx = sc->StartReadOnlyTransaction();
-  if (!tx) return 2;
+  spanner::Transaction tx = spanner::MakeReadOnlyTransaction();
 
   // Demonstrate serializing and deserializing a Transaction
-  std::string data = spanner::SerializeTransaction(*tx);
+  std::string data = spanner::SerializeTransaction(tx);
   StatusOr<spanner::Transaction> tx2 = spanner::DeserializeTransaction(data);
   if (!tx2) return 3;
-  assert(*tx == *tx2);
+  /* assert(tx == tx2); */
   std::cout << "Using serialized transaction: " << data << "\n";
 
   StatusOr<spanner::Client> sc2 = spanner::MakeClient(*tx2);
@@ -531,7 +548,7 @@ int main() {
   // Uses Client::Read().
   std::cout << "\n# Using Client::Read()...\n";
   for (StatusOr<spanner::Row>& row :
-       sc->Read(*tx, table, std::move(keys), columns)) {
+       sc->Read(tx, table, std::move(keys), columns)) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?
@@ -539,11 +556,11 @@ int main() {
 
     // You can access cell values via accessors on the Row. You can specify
     // either the column name or the column's index.
-    assert(row->is<int64_t>("D"));
+    /* assert(row->is<int64_t>("D")); */
     std::optional<int64_t> d = row->get<int64_t>("D");
     std::cout << "D=" << d.value_or(-1) << "\n";
 
-    assert(row->is<int64_t>(3));
+    /* assert(row->is<int64_t>(3)); */
     d = row->get<int64_t>(3);
     std::cout << "D(index 3)=" << d.value_or(-1) << "\n";
 
@@ -562,13 +579,13 @@ int main() {
     }
   }
 
-  // Uses Client::ExecuteSql().
-  std::cout << "\n# Using Client::ExecuteSql()...\n";
+  // Uses Client::Query().
+  std::cout << "\n# Using Client::Query()...\n";
   spanner::SqlStatement sql(
       "select * from Mytable where id > @msg_id and name like @name",
       {spanner::Cell("msg_id", int64_t{123}),
        spanner::Cell("name", std::string("sally"))});
-  for (StatusOr<spanner::Row>& row : sc->ExecuteSql(*tx, sql)) {
+  for (StatusOr<spanner::Row>& row : sc->Query(tx, sql)) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?
@@ -588,7 +605,7 @@ int main() {
     }
   }
 
-  Status s = sc->Rollback(*tx);
+  Status s = sc->Rollback(tx);
   // assert(s)
 }
 

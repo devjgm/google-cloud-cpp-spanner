@@ -265,9 +265,6 @@ class Transaction {
   struct ReadWriteOptions {
     // ...
   };
-  struct PartitionedDmlOptions {
-    // ...
-  };
   // Value type.
   // No default c'tor, but defaulted copy, assign, move, etc.
 
@@ -284,18 +281,22 @@ class Transaction {
   friend std::string SerializeTransaction(Transaction);
   friend Transaction MakeReadOnlyTransaction(Transaction::ReadOnlyOptions);
   friend Transaction MakeReadWriteTransaction(Transaction::ReadWriteOptions);
-  friend Transaction MakePartitionedDmlTransaction(
-      Transaction::PartitionedDmlOptions);
 
-  static Transaction MakeSingleUseTransaction() {
-    return Transaction(SingleUse{});
+  struct PartitionedDml {};
+  explicit Transaction(PartitionedDml) {}
+  static Transaction MakePartitionedDmlTransaction() {
+    return Transaction(PartitionedDml{});
   }
 
   struct SingleUse {};
   explicit Transaction(SingleUse){};
+  static Transaction MakeSingleUseTransaction() {
+    return Transaction(SingleUse{});
+  }
+
   explicit Transaction(ReadOnlyOptions opts) {}
   explicit Transaction(ReadWriteOptions opts) {}
-  explicit Transaction(PartitionedDmlOptions opts) {}
+
 
   class Impl;
   std::shared_ptr<Impl> impl_;
@@ -306,11 +307,6 @@ Transaction MakeReadOnlyTransaction(Transaction::ReadOnlyOptions opts = {}) {
 }
 
 Transaction MakeReadWriteTransaction(Transaction::ReadWriteOptions opts = {}) {
-  return Transaction(opts);
-}
-
-Transaction MakePartitionedDmlTransaction(
-    Transaction::PartitionedDmlOptions opts = {}) {
   return Transaction(opts);
 }
 
@@ -360,19 +356,19 @@ class ReadPartition {
 std::string SerializeReadPartition(ReadPartition p) { return p.token_; }
 StatusOr<ReadPartition> DeserializeReadPartition(std::string s) { return {}; }
 
-class QueryPartition {
+class SqlPartition {
  public:
   // Value type.
  private:
-  friend std::string SerializeQueryPartition(QueryPartition p);
-  friend StatusOr<QueryPartition> DeserializeQueryPartition(std::string s);
+  friend std::string SerializeSqlPartition(SqlPartition p);
+  friend StatusOr<SqlPartition> DeserializeSqlPartition(std::string s);
   std::string token_;
   Transaction tx_;
   SqlStatement statement_;
 };
 
-std::string SerializeQueryPartition(QueryPartition p) { return p.token_; }
-StatusOr<QueryPartition> DeserializeQueryPartition(std::string s) { return {}; }
+std::string SerializeSqlPartition(SqlPartition p) { return p.token_; }
+StatusOr<SqlPartition> DeserializeSqlPartition(std::string s) { return {}; }
 
 // Represents a connection to a Spanner database.
 class Client {
@@ -443,11 +439,11 @@ class Client {
   }
 
   //
-  // Query
+  // SQL methods
   //
 
   // TODO: Add support for QueryMode
-  ResultStream Query(Transaction tx, SqlStatement statement) {
+  ResultStream Execute(Transaction tx, SqlStatement statement) {
     auto columns = {"col1", "col2", "col3"};
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -465,26 +461,26 @@ class Client {
     return ResultStream(v);
   }
 
-  ResultStream Query(SqlStatement statement) {
+  ResultStream Execute(SqlStatement statement) {
     auto single_use = Transaction::MakeSingleUseTransaction();
-    return Query(std::move(single_use), std::move(statement));
+    return Execute(std::move(single_use), std::move(statement));
   }
 
   // NOTE: Requires a read-only transaction
-  StatusOr<std::vector<QueryPartition>> PartitionQuery(
+  StatusOr<std::vector<SqlPartition>> PartitionQuery(
       Transaction tx, SqlStatement statement, PartitionOptions opts = {}) {
-    // TODO: Call Spanner's PartitionRead() RPC.
+    // TODO: Call Spanner's PartitionQuery() RPC.
     return {};
   }
 
-  ResultStream Query(QueryPartition partition) {
+  ResultStream Execute(SqlPartition partition) {
     // TODO: Call Spanner's StreamingExecuteSql RPC with the data in
     // `partition`.
     return {};
   }
 
   //
-  // ExecuteBatchDml
+  // DML methods
   //
 
   // Note: Does not support single-use transactions, so no overload for that.
@@ -493,6 +489,15 @@ class Client {
       Transaction tx, std::vector<SqlStatement> statements) {
     // TODO: Call spanner's ExecuteBatchDml RPC.
     return {};
+  }
+
+
+  StatusOr<int64_t> ExecutePartitionedDml(SqlStatement statement) {
+    // TODO: Call Execute() with a PartitionedDmlTransaction
+    Transaction dml = Transaction::MakePartitionedDmlTransaction();
+    ResultStream r = Execute(dml, statement);
+    // Look at the result set stats and return the "row_count_lower_bound
+    return 42;
   }
 
  private:
@@ -579,13 +584,13 @@ int main() {
     }
   }
 
-  // Uses Client::Query().
-  std::cout << "\n# Using Client::Query()...\n";
+  // Uses Client::Execute().
+  std::cout << "\n# Using Client::Execute()...\n";
   spanner::SqlStatement sql(
       "select * from Mytable where id > @msg_id and name like @name",
       {spanner::Cell("msg_id", int64_t{123}),
        spanner::Cell("name", std::string("sally"))});
-  for (StatusOr<spanner::Row>& row : sc->Query(tx, sql)) {
+  for (StatusOr<spanner::Row>& row : sc->Execute(tx, sql)) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?

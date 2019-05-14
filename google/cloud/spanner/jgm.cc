@@ -398,14 +398,6 @@ class Client {
   // Read()
   //
 
-  // NOTE: Requires a read-only transaction
-  StatusOr<std::vector<ReadPartition>> PartitionRead(
-      Transaction tx, std::string table, KeySet keys,
-      std::vector<std::string> columns, PartitionOptions opts = {}) {
-    // TODO: Call Spanner's PartitionRead() RPC.
-    return {};
-  }
-
   // Reads the columns for the given keys from the specified table. Returns a
   // stream of Rows.
   // TODO: Add support for "limit" integer.
@@ -438,12 +430,20 @@ class Client {
     return {};
   }
 
+  // NOTE: Requires a read-only transaction
+  StatusOr<std::vector<ReadPartition>> PartitionRead(
+      Transaction tx, std::string table, KeySet keys,
+      std::vector<std::string> columns, PartitionOptions opts = {}) {
+    // TODO: Call Spanner's PartitionRead() RPC.
+    return {};
+  }
+
   //
   // SQL methods
   //
 
   // TODO: Add support for QueryMode
-  ResultStream Execute(Transaction tx, SqlStatement statement) {
+  ResultStream ExecuteSql(Transaction tx, SqlStatement statement) {
     auto columns = {"col1", "col2", "col3"};
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -461,21 +461,21 @@ class Client {
     return ResultStream(v);
   }
 
-  ResultStream Execute(SqlStatement statement) {
+  ResultStream ExecuteSql(SqlStatement statement) {
     auto single_use = Transaction::MakeSingleUseTransaction();
-    return Execute(std::move(single_use), std::move(statement));
+    return ExecuteSql(std::move(single_use), std::move(statement));
+  }
+
+  ResultStream ExecuteSql(SqlPartition partition) {
+    // TODO: Call Spanner's StreamingExecuteSql RPC with the data in
+    // `partition`.
+    return {};
   }
 
   // NOTE: Requires a read-only transaction
   StatusOr<std::vector<SqlPartition>> PartitionQuery(
       Transaction tx, SqlStatement statement, PartitionOptions opts = {}) {
     // TODO: Call Spanner's PartitionQuery() RPC.
-    return {};
-  }
-
-  ResultStream Execute(SqlPartition partition) {
-    // TODO: Call Spanner's StreamingExecuteSql RPC with the data in
-    // `partition`.
     return {};
   }
 
@@ -493,9 +493,9 @@ class Client {
 
 
   StatusOr<int64_t> ExecutePartitionedDml(SqlStatement statement) {
-    // TODO: Call Execute() with a PartitionedDmlTransaction
+    // TODO: Call ExecuteSql() with a PartitionedDmlTransaction
     Transaction dml = Transaction::MakePartitionedDmlTransaction();
-    ResultStream r = Execute(dml, statement);
+    ResultStream r = ExecuteSql(dml, statement);
     // Look at the result set stats and return the "row_count_lower_bound
     return 42;
   }
@@ -584,13 +584,13 @@ int main() {
     }
   }
 
-  // Uses Client::Execute().
-  std::cout << "\n# Using Client::Execute()...\n";
+  // Uses Client::ExecuteSql().
+  std::cout << "\n# Using Client::ExecuteSql()...\n";
   spanner::SqlStatement sql(
       "select * from Mytable where id > @msg_id and name like @name",
       {spanner::Cell("msg_id", int64_t{123}),
        spanner::Cell("name", std::string("sally"))});
-  for (StatusOr<spanner::Row>& row : sc->Execute(tx, sql)) {
+  for (StatusOr<spanner::Row>& row : sc->ExecuteSql(tx, sql)) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?

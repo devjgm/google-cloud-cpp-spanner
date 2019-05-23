@@ -374,17 +374,78 @@ StatusOr<Transaction> DeserializeTransaction(std::string s) {
 
 class Mutation {
  public:
+  static Mutation Insert(std::string table, std::vector<Row> rows) {
+    return Mutation(Operation::INSERT, std::move(table), std::move(rows));
+  }
+
+  static Mutation Update(std::string table, std::vector<Row> rows) {
+    return Mutation(Operation::UPDATE, std::move(table), std::move(rows));
+  }
+
+  // uses the alt implementation; columns + vector<row values>>
+  // Only do this for Update() for now.
+  static Mutation Update(std::string table,
+              std::vector<std::string> columns,
+              std::vector<std::vector<Value>> values) {
+    return Mutation(Operation::UPDATE, std::move(table), std::move(columns),
+                    std::move(values));
+  }
+
+  static Mutation InsertOrUpdate(std::string table, std::vector<Row> rows) {
+    return Mutation(Operation::INSERT_OR_UPDATE, std::move(table),
+                    std::move(rows));
+  }
+
+  static Mutation Replace(std::string table, std::vector<Row> rows) {
+    return Mutation(Operation::REPLACE, std::move(table), std::move(rows));
+  }
+
+  static Mutation Delete(std::string table, KeySet keys) {
+    return Mutation(std::move(table), std::move(keys));
+  }
   // value type, ==, !=
 
  private:
-  // Holds a google::spanner::v1::Mutation proto
-};
+  enum class Operation { INSERT, UPDATE, INSERT_OR_UPDATE, REPLACE, DELETE };
 
-Mutation MakeInsertMutation() { return {}; }
-Mutation MakeUpdateMutation() { return {}; }
-Mutation MakeInsertOrUpdateMutation() { return {}; }
-Mutation MakeReplaceMutation() { return {}; }
-Mutation MakeDeleteMutation() { return {}; }
+  // all but Delete
+  //
+  // All Rows must have the same columns and value types.
+  Mutation(Operation operation, std::string table, std::vector<Row> rows)
+      : operation_(operation),
+        table_(std::move(table)),
+        write_rows_(std::move(rows)) {}
+
+  // Alternative implementation - columns followed by values.
+  Mutation(Operation operation, std::string table,
+           std::vector<std::string> columns,
+           std::vector<std::vector<Value>> values)
+      : operation_(operation),
+        table_(std::move(table)),
+        write_columns_(std::move(columns)),
+        write_values_(std::move(values)) {}
+
+  // Delete
+  Mutation(std::string table, KeySet keys)
+      : operation_(Operation::DELETE),
+        table_(std::move(table)),
+        delete_keys_(std::move(keys)) {}
+
+  // TODO(salty) these data members are just temporary - clean it up.
+  // it may just wrap a google::spanner::v1::Mutation proto
+
+  // These are set for all mutations
+  Operation operation_;
+  std::string table_;
+
+  // and one of these 3 groups:
+  std::vector<Row> write_rows_;
+
+  std::vector<std::string> write_columns_;
+  std::vector<std::vector<Value>> write_values_;
+
+  KeySet delete_keys_;
+};
 
 // The options passed to PartitionRead() and PartitionQuery().
 struct PartitionOptions {
@@ -720,5 +781,79 @@ int main() {
 
   Status s = sc->Rollback(tx);
   // assert(s)
-}
 
+  // Commit Mutations
+  using ::spanner::Key;
+  using ::spanner::KeySet;
+  using ::spanner::Mutation;
+  using ::spanner::Row;
+  using ::spanner::Value;
+
+  std::cout << "\n# Using Client::Commit()...\n";
+  spanner::Transaction rw_tx = spanner::MakeReadWriteTransaction();
+
+  KeySet delete_keys("index2");
+  delete_keys.Add(Key(int64_t{0}, true, "hello"));
+
+#if 0
+  // TODO(salty) all these 'if 0' sections were from the old Row/Cell world;
+  // how does it look in the ColumnRange/Value world?
+  // TODO(salty) No longer relevant?
+  std::vector<Row> insert_rows;
+  Row row;
+  row.AddValue(Value("col1", int64_t{9}));
+  row.AddValue(Value("col2", true));
+  row.AddValue(Value("col3", "data4"));
+  insert_rows.push_back(row);
+  row.AddValue(Value("col1", int64_t{4}));
+  row.AddValue(Value("col2", true));
+  row.AddValue(Value("col3", "data9"));
+  insert_rows.push_back(row);
+  row.AddValue(Value("col1", int64_t{0}));
+  row.AddValue(Value("col2", false));
+  row.AddValue(Value("col3", "data0"));
+  insert_rows.push_back(row);
+#endif
+
+  std::vector<Mutation> mutations = {
+#if 0
+    Mutation::Insert("MyTable", insert_rows),
+    // table and vector of rows, where columns must match
+    Mutation::InsertOrUpdate(
+        "MyTable",
+        {
+            Row({Value("col1", int64_t{3}), Value("col2", true),
+                 Value("col3", "data")}),
+            Row({Value("col1", int64_t{8}), Value("col2", false),
+                 Value("col3", "d2")}),
+            Row({Value("col1", int64_t{42}), Value("col2", false),
+                 Value("col3", "d3")}),
+        }),
+    // table, then columns, then values only.
+    Mutation::Update("MyTable", {"col1", "col2", "col3"},
+                     {
+                         {Value(int64_t{3}), Value(true), Value("data")},
+                         {Value(int64_t{8}), Value(false), Value("d2")},
+                         {Value(int64_t{42}), Value(false), Value("d3")},
+                     }),
+      // TODO(salty) it would be nice to omit the Value() constructor calls
+      // above and just be able to write this, but that's not currently
+      // possible without making the Value constructor non-explicit.
+      // Maybe the forthcoming Row() implementation could do this.
+      Mutation::Update("MyTable", {"col1", "col2", "col3"},
+                       {
+                           {int64_t{3}, true, "data"},
+                           {int64_t{8}, false, "d2"},
+                           {int64_t{42}, false, "d3"},
+                       }),
+#endif
+    Mutation::Delete("MyTable", delete_keys),
+    Mutation::Delete("MyTable",
+                     KeySet("index2", {Key(int64_t{0}, true, "hello")})),
+  };
+
+  auto rw_result = sc->Commit(rw_tx, mutations);
+  if (rw_result) {
+    std::cout << std::chrono::system_clock::to_time_t(*rw_result) << "\n";
+  }  // else error
+}

@@ -5,12 +5,12 @@
 //
 // The primary public API points shown here are:
 //
-// * spanner::Cell - A strongly typed value in a Spanner row-column.
-// * spanner::Row - A range of spanner::Cells, with some additional methods for
-//                  conveniently accessing the values contained in the cells
-//                  via their position and/or column name.
+// * spanner::Value - A strongly typed value in a Spanner row-column.
+// * spanner::Row - A range of spanner::Values, with some additional methods for
+//                  conveniently accessing the values via their position and/or
+//                  column name.
 //
-// * spanner::Key - A range of cell values for the columns in the "index".
+// * spanner::Key - A range of values for the columns in the "index".
 // * spanner::KeySet - A collection of Keys and KeyRanges for an index.
 //
 // * spanner::Client - Represents a connection to a Spanner database.
@@ -83,104 +83,89 @@ struct Value : ValueVariant {
   using ValueVariant::ValueVariant;
 };
 
-// Just like ValueVariant, but each type is wrapped in a std::optional so that
-// we can store the notion of a null cell while preserving the cell's type.
-using CellValue = Optionalize<ValueVariant>::type;
-
 }  // namespace internal
 
 //
 // USER-FACING PUBLIC API
 //
 
-// Represents a strongly-typed value at a Spanner row-column intersection.
-// Cells have a column name and a value. Provides type-safe accessors for the
-// contained value, which may be "null".
-class Cell {
+class Value {
  public:
-  template <typename T>
-  explicit Cell(std::string c, T&& v)
-      : column_(std::move(c)),
-        value_{std::optional<std::decay_t<T>>(std::forward<T>(v))} {}
-
-  std::string column() const { return column_; }
-
-  // Type-safe getter, allows
-  //   auto opt = cell.get<int64_t>();
-  template <typename T>
-  std::optional<T> get() const {  // XXX: This throws if T is the wrong type.
-    return std::get<std::optional<T>>(value_);
+  template <typename T>   // TODO: Add appropriate enablers
+  explicit Value(T&& v) {
+    // ...
   }
 
-  // Returns true if the cell's type is T.
-  //   bool b = cell.is<int64_t>();
+  // Returns true if the value's type is T.
+  //   bool b = value.is<int64_t>();
   template <typename T>
   bool is() const {
-    return std::holds_alternative<std::optional<T>>(value_);
+    return {};
+  }
+
+  // Type-safe getter, allows
+  //   auto opt = value.get<int64_t>();
+  //
+  // Returns nullopt if the "null" value.
+  // Crashes (or UB) if T is the wrong type.
+  template <typename T>
+  std::optional<T> get() const {
+    return {};
   }
 
  private:
-  std::string column_;
-  internal::CellValue value_;
+   // Basically holds a spanner Value proto.
 };
 
-// Represents a range of Cells. Provides type-safe convenience member functions
-// for accessing Cells by their column name or index offset within the row.
+// Represents a range of Values. Provides type-safe convenience member functions
+// for accessing Values by their column name or index offset within the row.
 class Row {
  public:
-  using iterator = std::vector<Cell>::iterator;
-  using const_iterator = std::vector<Cell>::const_iterator;
+  using iterator = std::vector<Value>::iterator;
+  using const_iterator = std::vector<Value>::const_iterator;
 
   iterator begin() { return v_.begin(); }
   iterator end() { return v_.end(); }
   const_iterator begin() const { return v_.begin(); }
   const_iterator end() const { return v_.end(); }
 
-  void AddCell(Cell cell) { v_.push_back(std::move(cell)); }
+  void AddValue(Value value) { v_.push_back(std::move(value)); }
 
   template <typename T>
   std::optional<T> get(std::string const& col) const {
-    for (auto& cell : v_) {  // XXX: maybe a better non-linear search?
-      if (col == cell.column()) return cell.get<T>();
-    }
-    return std::nullopt;
+    return {};
   }
 
   template <typename T>
   std::optional<T> get(size_t index) const {
-    return index < v_.size() ? v_[index].get<T>() : std::nullopt;
+    return {};
   }
 
   template <typename T>
   bool is(std::string const& col) const {
-    for (auto& cell : v_) {
-      if (col == cell.column()) return cell.is<T>();
-    }
-    return false;  // XXX
+    return {};
   }
   template <typename T>
   bool is(size_t index) {
-    return index < v_.size() ? v_[index].is<T>() : false;  // XXX
+    return {};
   }
 
  private:
-  std::vector<Cell> v_;
+  std::vector<Value> v_;
 };
 
-// Represents a range of cell values that correspond to a DB table index.
-// Similar to a Row (both contain a range of cell values), but this doesn't
-// have column names, nor any of the accessors. Maybe we want to have some
-// other accessors here?
+// Represents a range of values that correspond to a DB table index. Similar to
+// a Row (both contain a range of values), but this doesn't have column names,
+// nor any of the accessors. Maybe we want to have some other accessors here?
 //
-// TODO: Need some way to specify a null cell
+// TODO: Need some way to specify a null value
 class Key {
  public:
   template <typename... Ts>  // XXX: Add appropriate enablers.
-  explicit Key(Ts&&... ts)
-      : v{std::optional<std::decay_t<Ts>>(std::forward<Ts>(ts))...} {}
+  explicit Key(Ts&&... ts) : v{std::forward<Ts>(ts)...} {}
 
  private:
-  std::vector<internal::CellValue> v;
+  std::vector<internal::Value> v;
 };
 
 // Represents the name of a database table index, along with a bunch of Keys
@@ -242,10 +227,10 @@ class ResultStream {
 // ... follow Spanner's docs about this.
 class SqlStatement {
  public:
-  // XXX: Can/should we re-use Cell here? It could be made more generic so
+  // XXX: Can/should we re-use Value here? It could be made more generic so
   // that it's column attribute is just a generic "name", not necessarily a
   // column?
-  using param_type = std::vector<Cell>;
+  using param_type = std::map<std::string, Value>;
   explicit SqlStatement(std::string sql, param_type params)
       : sql_(std::move(sql)), params_(std::move(params)) {}
 
@@ -408,11 +393,11 @@ class Client {
     int64_t data = 1;
     v.push_back(Row{});
     for (auto const& c : columns) {
-      v.back().AddCell(Cell(c, data++));
+      v.back().AddValue(Value(data++));
     }
     v.push_back(Row{});
     for (auto const& c : columns) {
-      v.back().AddCell(Cell(c, data++));
+      v.back().AddValue(Value(data++));
     }
     return ResultStream(v);
   }
@@ -450,12 +435,12 @@ class Client {
     double data = 1;
     v.push_back(Row{});
     for (auto const& c : columns) {
-      v.back().AddCell(Cell(c, data));
+      v.back().AddValue(Value(data));
       data += 1;
     }
     v.push_back(Row{});
     for (auto const& c : columns) {
-      v.back().AddCell(Cell(c, data));
+      v.back().AddValue(Value(data));
       data += 1;
     }
     return ResultStream(v);
@@ -559,8 +544,8 @@ int main() {
       continue;  // Or break? Can the next read succeed?
     }
 
-    // You can access cell values via accessors on the Row. You can specify
-    // either the column name or the column's index.
+    // You can access values via accessors on the Row. You can specify either
+    // the column name or the column's index.
     /* assert(row->is<int64_t>("D")); */
     std::optional<int64_t> d = row->get<int64_t>("D");
     std::cout << "D=" << d.value_or(-1) << "\n";
@@ -569,16 +554,15 @@ int main() {
     d = row->get<int64_t>(3);
     std::cout << "D(index 3)=" << d.value_or(-1) << "\n";
 
-    // Additionally, you can iterate all the Cells in a Row.
+    // Additionally, you can iterate all the Values in a Row.
     std::cout << "Row:\n";
-    for (spanner::Cell& cell : *row) {
-      std::cout << cell.column() << ": ";
-      if (cell.is<bool>()) {
-        std::cout << "BOOL(" << *cell.get<bool>() << ")\n";
-      } else if (cell.is<int64_t>()) {
-        std::cout << "INT64(" << cell.get<int64_t>().value_or(-1) << ")\n";
-      } else if (cell.is<double>()) {
-        std::cout << "FLOAT64(" << *cell.get<double>() << ")\n";
+    for (spanner::Value& value : *row) {
+      if (value.is<bool>()) {
+        std::cout << "BOOL(" << *value.get<bool>() << ")\n";
+      } else if (value.is<int64_t>()) {
+        std::cout << "INT64(" << value.get<int64_t>().value_or(-1) << ")\n";
+      } else if (value.is<double>()) {
+        std::cout << "FLOAT64(" << *value.get<double>() << ")\n";
       }
       // ...
     }
@@ -588,26 +572,14 @@ int main() {
   std::cout << "\n# Using Client::ExecuteSql()...\n";
   spanner::SqlStatement sql(
       "select * from Mytable where id > @msg_id and name like @name",
-      {spanner::Cell("msg_id", int64_t{123}),
-       spanner::Cell("name", std::string("sally"))});
+      {{"msg_id", spanner::Value(int64_t{123})},
+       {"name", spanner::Value(std::string("sally"))}});
   for (StatusOr<spanner::Row>& row : sc->ExecuteSql(tx, sql)) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?
     }
-    // Additionally, you can iterate all the Cells in a Row.
-    std::cout << "Row:\n";
-    for (spanner::Cell& cell : *row) {
-      std::cout << cell.column() << ": ";
-      if (cell.is<bool>()) {
-        std::cout << "BOOL(" << *cell.get<bool>() << ")\n";
-      } else if (cell.is<int64_t>()) {
-        std::cout << "INT64(" << cell.get<int64_t>().value_or(-1) << ")\n";
-      } else if (cell.is<double>()) {
-        std::cout << "FLOAT64(" << *cell.get<double>() << ")\n";
-      }
-      // ...
-    }
+    // ...
   }
 
   Status s = sc->Rollback(tx);

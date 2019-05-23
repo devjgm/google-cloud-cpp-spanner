@@ -17,7 +17,7 @@
 //                     This class only has a Read() method currently. This one
 //                     Read() method implements both streaming and
 //                     non-streaming reads.
-// * spanner::ResultRange - A range of spanner::Rows.
+// * spanner::ResultSet - A range of spanner::Rows.
 //
 // Look at the main() function at the bottom to see what the usage looks like.
 //
@@ -69,19 +69,19 @@ using STRUCT = std::map<std::string, std::shared_ptr<Value>>;
 /* using DATE = XXX; */
 /* using BYTES = XXX; */
 
-// Converts a std::variant<Ts...> to a std::variant<std::optional<Ts>...>
-template <typename... Ts>
-struct Optionalize;
-template <typename... Ts>
-struct Optionalize<std::variant<Ts...>> {
-  using type = std::variant<std::optional<Ts>...>;
-};
+/* // Converts a std::variant<Ts...> to a std::variant<std::optional<Ts>...> */
+/* template <typename... Ts> */
+/* struct Optionalize; */
+/* template <typename... Ts> */
+/* struct Optionalize<std::variant<Ts...>> { */
+/*   using type = std::variant<std::optional<Ts>...>; */
+/* }; */
 
-// A type-safe container for any of the types that Spanner can store.
-using ValueVariant = std::variant<BOOL, INT64, FLOAT64, STRING, ARRAY, STRUCT>;
-struct Value : ValueVariant {
-  using ValueVariant::ValueVariant;
-};
+/* // A type-safe container for any of the types that Spanner can store. */
+/* using ValueVariant = std::variant<BOOL, INT64, FLOAT64, STRING, ARRAY, STRUCT>; */
+/* struct Value : ValueVariant { */
+/*   using ValueVariant::ValueVariant; */
+/* }; */
 
 }  // namespace internal
 
@@ -117,42 +117,110 @@ class Value {
    // Basically holds a spanner Value proto.
 };
 
-// Represents a range of Values. Provides type-safe convenience member functions
-// for accessing Values by their column name or index offset within the row.
-class Row {
+class ColumnBase {
+  public:
+   std::string name() const { return {}; }
+
+   template <typename T>
+   bool is() const {
+     return {};
+   }
+
+   friend bool operator==(ColumnBase a, ColumnBase b) {
+     return a.name_ == b.name_ && a.index_ == b.index_;
+   }
+
+   friend bool operator!=(ColumnBase a, ColumnBase b) { return !(a == b); }
+
+  private:
+   friend class Row;
+
+   std::size_t index() const { return index_; }
+
+   // TODO: Add an argument for the enum value for the type.
+   explicit ColumnBase(std::string name, std::size_t index)
+       : name_(std::move(name)), index_(index) {}
+
+   std::string name_;
+   std::size_t index_;
+   // some Type enum to implement is<T>()
+};
+
+template <typename T>
+struct Column : ColumnBase {
+  using type = T;
+};
+
+class ColumnRange {
  public:
-  using iterator = std::vector<Value>::iterator;
-  using const_iterator = std::vector<Value>::const_iterator;
+  using iterator = std::vector<ColumnBase>::iterator;
 
-  iterator begin() { return v_.begin(); }
-  iterator end() { return v_.end(); }
-  const_iterator begin() const { return v_.begin(); }
-  const_iterator end() const { return v_.end(); }
+  iterator begin() { return columns_.begin(); }
+  iterator end() { return columns_.end(); }
 
-  void AddValue(Value value) { v_.push_back(std::move(value)); }
+  std::size_t size() const { return columns_.size(); }
+  bool empty() const { return columns_.empty(); }
 
-  template <typename T>
-  std::optional<T> get(std::string const& col) const {
-    return {};
-  }
+  StatusOr<ColumnBase> get(std::string name) const { return {}; }
+  StatusOr<ColumnBase> get(std::size_t index) const { return {}; }
 
   template <typename T>
-  std::optional<T> get(size_t index) const {
-    return {};
-  }
-
-  template <typename T>
-  bool is(std::string const& col) const {
+  StatusOr<Column<T>> get(std::string name) const {
     return {};
   }
   template <typename T>
-  bool is(size_t index) {
+  StatusOr<Column<T>> get(std::size_t index) const {
     return {};
   }
 
  private:
+  std::vector<ColumnBase> columns_;
+  // Maybe a map to make lookup by name faster enough?
+};
+
+// PICKUP!!!!!!!!!!!!!!!!!!!!!
+// How can we use the new column stuff to make the 
+// mutation factories nicer?
+struct M {};
+M MakeFooMutation(std::string table, ColumnRange cols) {
+  return {};
+}
+M m = MakeFooMutation("MyTable", ColumnRange{});
+
+// Represents a range of Values.
+class Row {
+ public:
+  using iterator = std::vector<Value>::iterator;
+
+  iterator begin() { return v_.begin(); }
+  iterator end() { return v_.end(); }
+
+  template <typename T>
+  std::optional<T> get(ColumnBase c) {
+    return v_[c.index()].get<T>();
+  }
+
+  // Overload that deduces T given a Column<T> argument.
+  template <typename T>
+  std::optional<T> get(Column<T> c) {
+    return get<T>(ColumnBase(c));
+  }
+
+ private:
+  friend class Client;
+  void AddValue(Value value) { v_.push_back(std::move(value)); }
   std::vector<Value> v_;
 };
+
+class RowStream {
+ public:
+  using value_type = StatusOr<Row>;
+  using iterator = std::vector<value_type>::iterator;
+
+  iterator begin() { return {}; }
+  iterator end() { return {}; }
+};
+
 
 // Represents a range of values that correspond to a DB table index. Similar to
 // a Row (both contain a range of values), but this doesn't have column names,
@@ -162,10 +230,10 @@ class Row {
 class Key {
  public:
   template <typename... Ts>  // XXX: Add appropriate enablers.
-  explicit Key(Ts&&... ts) : v{std::forward<Ts>(ts)...} {}
+  explicit Key(Ts&&... ts) : v{Value(std::forward<Ts>(ts))...} {}
 
  private:
-  std::vector<internal::Value> v;
+  std::vector<Value> v;
 };
 
 // Represents the name of a database table index, along with a bunch of Keys
@@ -197,29 +265,26 @@ class ResultStats {
   // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXxxxxxx
 };
 
-// Represents a stream of Row objects. Actually, a stream of StatusOr<Row>.
+// Represents the result of a Spanner query/read RPC call. Gives access to the
+// returned columns, rows, and stats.
 // This will be returned from the Client::Read() function.
-class ResultRange {
+class ResultSet {
  public:
-  using value_type = StatusOr<Row>;
-  using iterator = std::vector<value_type>::iterator;
-  using const_iterator = std::vector<value_type>::const_iterator;
-
-  ResultRange() = default;
-  explicit ResultRange(std::vector<Row> v) {
-    for (auto&& e : v) v_.emplace_back(e);
+  ResultSet() = default;
+  explicit ResultSet(std::vector<Row> v) {
+    // ...
   }
 
-  iterator begin() { return v_.begin(); }
-  iterator end() { return v_.end(); }
-  const_iterator begin() const { return v_.begin(); }
-  const_iterator end() const { return v_.end(); }
+  // XXX: perhaps moved ColumnRange into this class, and make this class itself
+  // able to iterate the rows. 
+
+  ColumnRange columns() const { return {}; }
+  RowStream rows() const { return {}; }
 
   // XXX: Can only be called after consuming the whole stream.
   std::optional<ResultStats> stats() const { return {}; }
 
- private:
-  std::vector<value_type> v_;
+  // XXX: add the fetched transaction timestamp (if available)
 };
 
 // Represents an SQL statement with optional parameters. Parameter placeholders
@@ -386,7 +451,7 @@ class Client {
   // Reads the columns for the given keys from the specified table. Returns a
   // stream of Rows.
   // TODO: Add support for "limit" integer.
-  ResultRange Read(Transaction tx, std::string table, KeySet keys,
+  ResultSet Read(Transaction tx, std::string table, KeySet keys,
                     std::vector<std::string> columns) {
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -399,18 +464,18 @@ class Client {
     for (auto const& c : columns) {
       v.back().AddValue(Value(data++));
     }
-    return ResultRange(v);
+    return ResultSet(v);
   }
 
   // Same as Read() above, but implicitly uses a single-use Transaction.
-  ResultRange Read(std::string table, KeySet keys,
+  ResultSet Read(std::string table, KeySet keys,
                     std::vector<std::string> columns) {
     auto single_use = Transaction::MakeSingleUseTransaction();
     return Read(std::move(single_use), std::move(table), std::move(keys),
                 std::move(columns));
   }
 
-  ResultRange Read(ReadPartition partition) {
+  ResultSet Read(ReadPartition partition) {
     // TODO: Call Spanner's StreamingRead RPC with the data in `partition`.
     return {};
   }
@@ -428,7 +493,7 @@ class Client {
   //
 
   // TODO: Add support for QueryMode
-  ResultRange ExecuteSql(Transaction tx, SqlStatement statement) {
+  ResultSet ExecuteSql(Transaction tx, SqlStatement statement) {
     auto columns = {"col1", "col2", "col3"};
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -443,15 +508,15 @@ class Client {
       v.back().AddValue(Value(data));
       data += 1;
     }
-    return ResultRange(v);
+    return ResultSet(v);
   }
 
-  ResultRange ExecuteSql(SqlStatement statement) {
+  ResultSet ExecuteSql(SqlStatement statement) {
     auto single_use = Transaction::MakeSingleUseTransaction();
     return ExecuteSql(std::move(single_use), std::move(statement));
   }
 
-  ResultRange ExecuteSql(SqlPartition partition) {
+  ResultSet ExecuteSql(SqlPartition partition) {
     // TODO: Call Spanner's StreamingExecuteSql RPC with the data in
     // `partition`.
     return {};
@@ -480,7 +545,7 @@ class Client {
   StatusOr<int64_t> ExecutePartitionedDml(SqlStatement statement) {
     // TODO: Call ExecuteSql() with a PartitionedDmlTransaction
     Transaction dml = Transaction::MakePartitionedDmlTransaction();
-    ResultRange r = ExecuteSql(dml, statement);
+    ResultSet r = ExecuteSql(dml, statement);
     // Look at the result set stats and return the "row_count_lower_bound
     return 42;
   }
@@ -535,37 +600,105 @@ int main() {
 
   StatusOr<spanner::Client> sc2 = spanner::MakeClient(*tx2);
 
+  /* std::cout << "\n# Using Client::Read()...\n"; */
+  /* spanner::ResultSet result = sc->Read(tx, table, std::move(keys), columns); */
+  /* spanner::ColumnRange cols = result.columns(); */
+  /* StatusOr<spanner::Column<int64_t>> col_D = cols.get<int64_t>("D"); */
+  /* StatusOr<spanner::ColumnBase> col_E = cols.get("E"); */
+  /* if (!col_D || !col_E) { */
+  /*   std::cerr << "Unexpected column columns\n"; */
+  /*   return -1; */
+  /* } */
+
+  /* for (StatusOr<spanner::Row>& row : result.rows()) { */
+  /*   if (!row) { */
+  /*     std::cout << "Read failed\n"; */
+  /*     continue;  // Or break? Can the next read succeed? */
+  /*   } */
+  /*   std::optional<int64_t> v; */
+  /*   v = row->get(*col_D); */
+  /*   if (v) { */
+  /*     std::cout << *v; */
+  /*   } else { */
+  /*     std::cout << "null"; */
+  /*   } */
+  /*   std::cout << "\n"; */
+
+  /*   v = row->get<int64_t>(*col_E); */
+  /*   (v ? std::cout << *v : std::cout << "null") << "\n"; */
+  /* } */
+
+  std::cout << "\n# Using Client::Read()...\n";
+
+  spanner::ResultSet result = sc->Read(tx, table, std::move(keys), columns);
+  spanner::ColumnRange cols = result.columns();
+  StatusOr<spanner::Column<std::string>> col_singer_id = cols.get<std::string>("SingerId");
+  StatusOr<spanner::Column<std::string>> col_album_id = cols.get<std::string>("AlbumId");
+  StatusOr<spanner::Column<std::string>> col_album_title = cols.get<std::string>("AlbumTitle");
+  if (!col_singer_id || !col_album_id || !col_album_title) {
+    std::cerr << "Unexpected column columns\n";
+    return -1;
+  }
+
+  for (StatusOr<spanner::Row>& row : result.rows()) {
+    if (!row) {
+      std::cout << "Read failed\n";
+      continue;  // Or break? Can the next read succeed?
+    }
+    std::cout << col_singer_id->name() << ": " << *row->get(*col_singer_id)
+              << ", "
+              << "AlbumId: " << *row->get(*col_album_id) << ", "
+              << "AlbumTitle: " << *row->get(*col_album_title) << "\n";
+  }
+
+
+  /* result = sc->Read(tx, table, std::move(keys), columns); */
+  /* cols = result.columns(); */
+  /* for (StatusOr<spanner::Row>& row : result.rows()) { */
+  /*   if (!row) { */
+  /*     std::cout << "Read failed\n"; */
+  /*     continue;  // Or break? Can the next read succeed? */
+  /*   } */
+  /*   for (spanner::ColumnBase c : cols) { */
+  /*     auto x = row.get<int64_t>(cols); */
+
+  /*   } */
+  /*   // ... */
+  /* } */
+
+
+
   // Uses Client::Read().
   std::cout << "\n# Using Client::Read()...\n";
-  for (StatusOr<spanner::Row>& row :
-       sc->Read(tx, table, std::move(keys), columns)) {
+  result = sc->Read(tx, table, std::move(keys), columns);
+  for (StatusOr<spanner::Row>& row : result.rows()) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?
     }
 
-    // You can access values via accessors on the Row. You can specify either
-    // the column name or the column's index.
-    /* assert(row->is<int64_t>("D")); */
-    std::optional<int64_t> d = row->get<int64_t>("D");
-    std::cout << "D=" << d.value_or(-1) << "\n";
+    /* // You can access values via accessors on the Row. You can specify either */
+    /* // the column name or the column's index. */
+    /* /1* assert(row->is<int64_t>("D")); *1/ */
+    /* std::optional<int64_t> d = row->get<int64_t>("D"); */
+    /* std::cout << "D=" << d.value_or(-1) << "\n"; */
 
-    /* assert(row->is<int64_t>(3)); */
-    d = row->get<int64_t>(3);
-    std::cout << "D(index 3)=" << d.value_or(-1) << "\n";
+    /* /1* assert(row->is<int64_t>(3)); *1/ */
+    /* d = row->get<int64_t>(3); */
+    /* std::cout << "D(index 3)=" << d.value_or(-1) << "\n"; */
 
-    // Additionally, you can iterate all the Values in a Row.
-    std::cout << "Row:\n";
-    for (spanner::Value& value : *row) {
-      if (value.is<bool>()) {
-        std::cout << "BOOL(" << *value.get<bool>() << ")\n";
-      } else if (value.is<int64_t>()) {
-        std::cout << "INT64(" << value.get<int64_t>().value_or(-1) << ")\n";
-      } else if (value.is<double>()) {
-        std::cout << "FLOAT64(" << *value.get<double>() << ")\n";
-      }
-      // ...
-    }
+    /* // Additionally, you can iterate all the Values in a Row. */
+    /* std::cout << "Row:\n"; */
+    /* for (spanner::Value& value : *row) { */
+    /*   if (value.is<bool>()) { */
+    /*     std::cout << "BOOL(" << *value.get<bool>() << ")\n"; */
+    /*   } else if (value.is<int64_t>()) { */
+    /*     std::cout << "INT64(" << value.get<int64_t>().value_or(-1) << ")\n"; */
+    /*   } else if (value.is<double>()) { */
+    /*     std::cout << "FLOAT64(" << *value.get<double>() << ")\n"; */
+    /*   } */
+    /*   // ... */
+    /* } */
   }
 
   // Uses Client::ExecuteSql().
@@ -574,7 +707,8 @@ int main() {
       "select * from Mytable where id > @msg_id and name like @name",
       {{"msg_id", spanner::Value(int64_t{123})},
        {"name", spanner::Value(std::string("sally"))}});
-  for (StatusOr<spanner::Row>& row : sc->ExecuteSql(tx, sql)) {
+  result = sc->ExecuteSql(tx, sql);
+  for (StatusOr<spanner::Row>& row : result.rows()) {
     if (!row) {
       std::cout << "Read failed\n";
       continue;  // Or break? Can the next read succeed?

@@ -248,15 +248,17 @@ class KeySet {
 
   KeySet() = default;  // uses the primary index.
   explicit KeySet(std::string index_name) : index_(std::move(index_name)) {}
+  KeySet(std::string index_name, std::vector<Key> keys)
+      : index_(std::move(index_name)), keys_(std::move(keys)) {}
 
-  void Add(Key key) { keys.push_back(std::move(key)); }
+  void Add(Key key) { keys_.push_back(std::move(key)); }
   void Limit(int limit) { limit_ = limit; }
 
  private:
   struct all_tag {};
   explicit KeySet(all_tag) : all_(true) {}
   std::string index_;
-  std::vector<Key> keys;
+  std::vector<Key> keys_;
   bool all_ = false;
   std::optional<int> limit_;
 };

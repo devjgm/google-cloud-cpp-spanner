@@ -17,7 +17,7 @@
 //                     This class only has a Read() method currently. This one
 //                     Read() method implements both streaming and
 //                     non-streaming reads.
-// * spanner::ResultStream - A "stream" of spanner::Rows.
+// * spanner::ResultRange - A range of spanner::Rows.
 //
 // Look at the main() function at the bottom to see what the usage looks like.
 //
@@ -199,14 +199,14 @@ class ResultStats {
 
 // Represents a stream of Row objects. Actually, a stream of StatusOr<Row>.
 // This will be returned from the Client::Read() function.
-class ResultStream {
+class ResultRange {
  public:
   using value_type = StatusOr<Row>;
   using iterator = std::vector<value_type>::iterator;
   using const_iterator = std::vector<value_type>::const_iterator;
 
-  ResultStream() = default;
-  explicit ResultStream(std::vector<Row> v) {
+  ResultRange() = default;
+  explicit ResultRange(std::vector<Row> v) {
     for (auto&& e : v) v_.emplace_back(e);
   }
 
@@ -386,7 +386,7 @@ class Client {
   // Reads the columns for the given keys from the specified table. Returns a
   // stream of Rows.
   // TODO: Add support for "limit" integer.
-  ResultStream Read(Transaction tx, std::string table, KeySet keys,
+  ResultRange Read(Transaction tx, std::string table, KeySet keys,
                     std::vector<std::string> columns) {
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -399,18 +399,18 @@ class Client {
     for (auto const& c : columns) {
       v.back().AddValue(Value(data++));
     }
-    return ResultStream(v);
+    return ResultRange(v);
   }
 
   // Same as Read() above, but implicitly uses a single-use Transaction.
-  ResultStream Read(std::string table, KeySet keys,
+  ResultRange Read(std::string table, KeySet keys,
                     std::vector<std::string> columns) {
     auto single_use = Transaction::MakeSingleUseTransaction();
     return Read(std::move(single_use), std::move(table), std::move(keys),
                 std::move(columns));
   }
 
-  ResultStream Read(ReadPartition partition) {
+  ResultRange Read(ReadPartition partition) {
     // TODO: Call Spanner's StreamingRead RPC with the data in `partition`.
     return {};
   }
@@ -428,7 +428,7 @@ class Client {
   //
 
   // TODO: Add support for QueryMode
-  ResultStream ExecuteSql(Transaction tx, SqlStatement statement) {
+  ResultRange ExecuteSql(Transaction tx, SqlStatement statement) {
     auto columns = {"col1", "col2", "col3"};
     // Fills in two rows of dummy data.
     std::vector<Row> v;
@@ -443,15 +443,15 @@ class Client {
       v.back().AddValue(Value(data));
       data += 1;
     }
-    return ResultStream(v);
+    return ResultRange(v);
   }
 
-  ResultStream ExecuteSql(SqlStatement statement) {
+  ResultRange ExecuteSql(SqlStatement statement) {
     auto single_use = Transaction::MakeSingleUseTransaction();
     return ExecuteSql(std::move(single_use), std::move(statement));
   }
 
-  ResultStream ExecuteSql(SqlPartition partition) {
+  ResultRange ExecuteSql(SqlPartition partition) {
     // TODO: Call Spanner's StreamingExecuteSql RPC with the data in
     // `partition`.
     return {};
@@ -480,7 +480,7 @@ class Client {
   StatusOr<int64_t> ExecutePartitionedDml(SqlStatement statement) {
     // TODO: Call ExecuteSql() with a PartitionedDmlTransaction
     Transaction dml = Transaction::MakePartitionedDmlTransaction();
-    ResultStream r = ExecuteSql(dml, statement);
+    ResultRange r = ExecuteSql(dml, statement);
     // Look at the result set stats and return the "row_count_lower_bound
     return 42;
   }

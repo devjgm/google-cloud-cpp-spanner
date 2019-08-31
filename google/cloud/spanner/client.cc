@@ -162,23 +162,11 @@ StatusOr<CommitResult> RunTransactionWithPolicies(
     std::function<StatusOr<Mutations>(Client, Transaction)> const& f,
     std::unique_ptr<RetryPolicy> retry_policy,
     std::unique_ptr<BackoffPolicy> backoff_policy) {
-  Status last_status(
-      StatusCode::kFailedPrecondition,
-      "Retry policy should not be exhausted when retry loop starts");
-  char const* reason = "Too many failures in ";
-  while (!retry_policy->IsExhausted()) {
-    auto result = RunTransactionImpl(client, opts, f);
-    if (result) return result;
-    last_status = std::move(result).status();
-    if (!retry_policy->OnFailure(last_status)) {
-      if (internal::SafeGrpcRetry::IsPermanentFailure(last_status)) {
-        reason = "Permanent failure in ";
-      }
-      break;
-    }
-    std::this_thread::sleep_for(backoff_policy->OnCompletion());
-  }
-  return internal::RetryLoopError(reason, __func__, last_status);
+  auto commit_block = [&] {
+    return RunTransactionImpl(client, opts, f);
+  };
+  return RunCommitBlockWithPolicies(commit_block, std::move(retry_policy),
+                                    std::move(backoff_policy));
 }
 
 std::unique_ptr<RetryPolicy> DefaultRunTransactionRetryPolicy() {
@@ -190,6 +178,29 @@ std::unique_ptr<BackoffPolicy> DefaultRunTransactionBackoffPolicy() {
   return ExponentialBackoffPolicy(std::chrono::milliseconds(100),
                                   std::chrono::minutes(5), 2.0)
       .clone();
+}
+
+StatusOr<CommitResult> RunCommitBlockWithPolicies(
+    std::function<StatusOr<CommitResult>()> const& f,
+    std::unique_ptr<RetryPolicy> retry_policy,
+    std::unique_ptr<BackoffPolicy> backoff_policy) {
+  Status last_status(
+      StatusCode::kFailedPrecondition,
+      "Retry policy should not be exhausted when retry loop starts");
+  char const* reason = "Too many failures in ";
+  while (!retry_policy->IsExhausted()) {
+    auto result = f();
+    if (result) return result;
+    last_status = std::move(result).status();
+    if (!retry_policy->OnFailure(last_status)) {
+      if (internal::SafeGrpcRetry::IsPermanentFailure(last_status)) {
+        reason = "Permanent failure in ";
+      }
+      break;
+    }
+    std::this_thread::sleep_for(backoff_policy->OnCompletion());
+  }
+  return internal::RetryLoopError(reason, __func__, last_status);
 }
 
 }  // namespace internal

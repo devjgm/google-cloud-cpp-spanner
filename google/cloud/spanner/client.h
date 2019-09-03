@@ -421,9 +421,8 @@ namespace internal {
  * @param backoff_policy controls how long does the function wait between
  *     retries.
  */
-StatusOr<CommitResult> RunTransactionWithPolicies(
-    Client client, Transaction::ReadWriteOptions const& opts,
-    std::function<StatusOr<Mutations>(Client, Transaction)> const& f,
+StatusOr<CommitResult> RunCommitBlockWithPolicies(
+    std::function<StatusOr<CommitResult>()> const& f,
     std::unique_ptr<RetryPolicy> retry_policy,
     std::unique_ptr<BackoffPolicy> backoff_policy);
 
@@ -432,12 +431,6 @@ std::unique_ptr<RetryPolicy> DefaultRunTransactionRetryPolicy();
 
 /// The default backoff policy for RunTransaction()
 std::unique_ptr<BackoffPolicy> DefaultRunTransactionBackoffPolicy();
-
-// XXX
-StatusOr<CommitResult> RunCommitBlockWithPolicies(
-    std::function<StatusOr<CommitResult>()> const& f,
-    std::unique_ptr<RetryPolicy> retry_policy,
-    std::unique_ptr<BackoffPolicy> backoff_policy);
 
 }  // namespace internal
 
@@ -454,12 +447,10 @@ StatusOr<CommitResult> RunCommitBlockWithPolicies(
  * transaction, meaning that the next attempt has a slightly better chance
  * of success than before.
  */
-inline StatusOr<CommitResult> RunTransaction(
-    Client client, Transaction::ReadWriteOptions const& opts,
-    std::function<StatusOr<Mutations>(Client, Transaction)> f) {
-  return internal::RunTransactionWithPolicies(
-      std::move(client), opts, std::move(f),
-      internal::DefaultRunTransactionRetryPolicy(),
+inline StatusOr<CommitResult> RunCommitBlock(
+    std::function<StatusOr<CommitResult>()> const& f) {
+  return internal::RunCommitBlockWithPolicies(
+      f, internal::DefaultRunTransactionRetryPolicy(),
       internal::DefaultRunTransactionBackoffPolicy());
 }
 
@@ -508,13 +499,6 @@ class AutoRollbackTransaction {
 
 inline AutoRollbackTransaction MakeAutoRollbackTransaction(Client c) {
   return AutoRollbackTransaction(std::move(c));
-}
-
-inline StatusOr<CommitResult> RunCommitBlock(
-    std::function<StatusOr<CommitResult>()> const& f) {
-  return internal::RunCommitBlockWithPolicies(
-      f, internal::DefaultRunTransactionRetryPolicy(),
-      internal::DefaultRunTransactionBackoffPolicy());
 }
 
 }  // namespace SPANNER_CLIENT_NS

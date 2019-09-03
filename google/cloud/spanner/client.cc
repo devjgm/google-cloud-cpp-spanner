@@ -130,51 +130,7 @@ std::shared_ptr<Connection> MakeConnection(Database const& db,
   return std::make_shared<internal::ConnectionImpl>(db, std::move(stub));
 }
 
-namespace {
-
-StatusOr<CommitResult> RunTransactionImpl(
-    Client& client, Transaction::ReadWriteOptions const& opts,
-    std::function<StatusOr<Mutations>(Client, Transaction)> const& f) {
-  Transaction txn = MakeReadWriteTransaction(opts);
-  StatusOr<Mutations> mutations;
-#if GOOGLE_CLOUD_CPP_HAVE_EXCEPTIONS
-  try {
-#endif
-    mutations = f(client, txn);
-#if GOOGLE_CLOUD_CPP_HAVE_EXCEPTIONS
-  } catch (...) {
-    auto status = client.Rollback(txn);
-    if (!status.ok()) {
-      GCP_LOG(WARNING) << "Rollback() failure in RunTransaction(): "
-                       << status.message();
-    }
-    throw;
-  }
-#endif
-  if (!mutations) {
-    auto status = client.Rollback(txn);
-    if (!status.ok()) {
-      GCP_LOG(WARNING) << "Rollback() failure in RunTransaction(): "
-                       << status.message();
-    }
-    return mutations.status();
-  }
-  return client.Commit(txn, *mutations);
-}
-
-}  // namespace
-
 namespace internal {
-
-StatusOr<CommitResult> RunTransactionWithPolicies(
-    Client client, Transaction::ReadWriteOptions const& opts,
-    std::function<StatusOr<Mutations>(Client, Transaction)> const& f,
-    std::unique_ptr<RetryPolicy> retry_policy,
-    std::unique_ptr<BackoffPolicy> backoff_policy) {
-  auto commit_block = [&] { return RunTransactionImpl(client, opts, f); };
-  return RunCommitBlockWithPolicies(commit_block, std::move(retry_policy),
-                                    std::move(backoff_policy));
-}
 
 std::unique_ptr<RetryPolicy> DefaultRunTransactionRetryPolicy() {
   return LimitedTimeRetryPolicy(/*maximum_duration=*/std::chrono::minutes(10))

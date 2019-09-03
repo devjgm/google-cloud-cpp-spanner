@@ -114,7 +114,7 @@ class Connection {
 
   struct CommitParams {
     Transaction transaction;
-    Mutations mutations;
+    std::vector<Mutation> mutations;
   };
   virtual StatusOr<CommitResult> Commit(CommitParams) = 0;
 

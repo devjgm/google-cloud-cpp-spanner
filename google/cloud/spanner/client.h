@@ -359,9 +359,9 @@ class Client {
    *     on failure.
    */
   StatusOr<CommitResult> Commit(Transaction transaction,
-                                Mutations mutations = {});
+                                std::vector<Mutation> mutations = {});
   StatusOr<CommitResult> Commit(AutoRollbackTransaction transaction,
-                                Mutations mutations = {});
+                                std::vector<Mutation> mutations = {});
 
   /**
    * Rolls back a read-write transaction, releasing any locks it holds.

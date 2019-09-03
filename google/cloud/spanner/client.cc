@@ -107,12 +107,12 @@ StatusOr<BatchDmlResult> Client::ExecuteBatchDml(
 }
 
 StatusOr<CommitResult> Client::Commit(Transaction transaction,
-                                      Mutations mutations) {
+                                      std::vector<Mutation> mutations) {
   return conn_->Commit({std::move(transaction), std::move(mutations)});
 }
 
 StatusOr<CommitResult> Client::Commit(AutoRollbackTransaction transaction,
-                                      Mutations mutations) {
+                                      std::vector<Mutation> mutations) {
   return Commit(transaction.release(), std::move(mutations));
 }
 

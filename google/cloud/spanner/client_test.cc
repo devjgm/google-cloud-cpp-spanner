@@ -499,35 +499,6 @@ TEST(ClientTest, RunCommitBlockRollbackError) {
   EXPECT_THAT(actual_read_params.columns, ElementsAre("C"));
 }
 
-/* #if GOOGLE_CLOUD_CPP_HAVE_EXCEPTIONS */
-/* TEST(ClientTest, RunTransactionException) { */
-/*   auto conn = std::make_shared<MockConnection>(); */
-/*   EXPECT_CALL(*conn, Read(_)) */
-/*       .WillOnce(Return(ByMove(Status(StatusCode::kInvalidArgument,
- * "blah")))); */
-/*   EXPECT_CALL(*conn, Rollback(_)).WillOnce(Return(Status())); */
-
-/*   auto mutation = MakeDeleteMutation("table", KeySet::All()); */
-/*   auto f = [&mutation](Client client, Transaction txn) -> StatusOr<Mutations>
- * { */
-/*     auto read = client.Read(std::move(txn), "T", KeySet::All(), {"C"}); */
-/*     if (!read) throw "Read() error"; */
-/*     return Mutations{mutation}; */
-/*   }; */
-
-/*   try { */
-/*     Client client(conn); */
-/*     auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
- */
-/*     FAIL(); */
-/*   } catch (char const* e) { */
-/*     EXPECT_STREQ(e, "Read() error"); */
-/*   } catch (...) { */
-/*     FAIL(); */
-/*   } */
-/* } */
-/* #endif */
-
 TEST(ClientTest, RunCommitBlock_RetryTransientFailures) {
   auto timestamp = internal::TimestampFromString("2019-08-14T21:16:21.123Z");
   ASSERT_STATUS_OK(timestamp);

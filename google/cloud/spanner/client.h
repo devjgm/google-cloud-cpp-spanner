@@ -44,6 +44,8 @@ namespace cloud {
 namespace spanner {
 inline namespace SPANNER_CLIENT_NS {
 
+class AutoRollbackTransaction;
+
 /**
  * Performs database client operations on Spanner.
  *
@@ -358,6 +360,8 @@ class Client {
    */
   StatusOr<CommitResult> Commit(Transaction transaction,
                                 Mutations mutations = {});
+  StatusOr<CommitResult> Commit(AutoRollbackTransaction transaction,
+                                Mutations mutations = {});
 
   /**
    * Rolls back a read-write transaction, releasing any locks it holds.
@@ -374,6 +378,7 @@ class Client {
    * @return The error status of the rollback.
    */
   Status Rollback(Transaction transaction);
+  Status Rollback(AutoRollbackTransaction transaction);
 
  private:
   std::shared_ptr<Connection> conn_;
@@ -457,6 +462,53 @@ inline StatusOr<CommitResult> RunTransaction(
       std::move(client), opts, std::move(f),
       internal::DefaultRunTransactionRetryPolicy(),
       internal::DefaultRunTransactionBackoffPolicy());
+}
+
+// XXX: This class needs to be unit tested.
+class AutoRollbackTransaction {
+ public:
+  AutoRollbackTransaction(Client c)
+      : client_(c), txn_(MakeReadWriteTransaction()) {}
+  ~AutoRollbackTransaction() {
+    if (rollback_) {
+      // Maybe debug log the status here?
+      (void)client_.Rollback(txn_);
+    }
+  }
+
+  // Move-only type
+  AutoRollbackTransaction(AutoRollbackTransaction const&) = delete;
+  AutoRollbackTransaction& operator=(AutoRollbackTransaction const&) = delete;
+  AutoRollbackTransaction(AutoRollbackTransaction&& other)
+      : client_(std::move(other.client_)),
+        txn_(std::move(other.txn_)),
+        rollback_(other.rollback_) {
+    other.rollback_ = false;
+  }
+  AutoRollbackTransaction& operator=(AutoRollbackTransaction&& other) {
+    client_ = std::move(other.client_);
+    txn_ = std::move(other.txn_);
+    rollback_ = other.rollback_;
+    other.rollback_ = false;
+    return *this;
+  }
+
+  operator Transaction() const { return txn_; }
+
+ private:
+  friend class Client;
+  Transaction&& release() {
+    rollback_ = false;
+    return std::move(txn_);
+  }
+
+  Client client_;
+  Transaction txn_;
+  bool rollback_ = true;
+};
+
+AutoRollbackTransaction MakeAutoRollbackTransaction(Client c) {
+  return AutoRollbackTransaction(std::move(c));
 }
 
 inline StatusOr<CommitResult> RunCommitBlock(

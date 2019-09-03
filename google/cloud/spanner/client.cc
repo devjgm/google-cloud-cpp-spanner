@@ -111,8 +111,17 @@ StatusOr<CommitResult> Client::Commit(Transaction transaction,
   return conn_->Commit({std::move(transaction), std::move(mutations)});
 }
 
+StatusOr<CommitResult> Client::Commit(AutoRollbackTransaction transaction,
+                                      Mutations mutations) {
+  return Commit(transaction.release(), mutations);
+}
+
 Status Client::Rollback(Transaction transaction) {
   return conn_->Rollback({std::move(transaction)});
+}
+
+Status Client::Rollback(AutoRollbackTransaction transaction) {
+  return Rollback(transaction.release());
 }
 
 std::shared_ptr<Connection> MakeConnection(Database const& db,

@@ -113,7 +113,7 @@ StatusOr<CommitResult> Client::Commit(Transaction transaction,
 
 StatusOr<CommitResult> Client::Commit(AutoRollbackTransaction transaction,
                                       Mutations mutations) {
-  return Commit(transaction.release(), mutations);
+  return Commit(transaction.release(), std::move(mutations));
 }
 
 Status Client::Rollback(Transaction transaction) {
@@ -171,9 +171,7 @@ StatusOr<CommitResult> RunTransactionWithPolicies(
     std::function<StatusOr<Mutations>(Client, Transaction)> const& f,
     std::unique_ptr<RetryPolicy> retry_policy,
     std::unique_ptr<BackoffPolicy> backoff_policy) {
-  auto commit_block = [&] {
-    return RunTransactionImpl(client, opts, f);
-  };
+  auto commit_block = [&] { return RunTransactionImpl(client, opts, f); };
   return RunCommitBlockWithPolicies(commit_block, std::move(retry_policy),
                                     std::move(backoff_policy));
 }

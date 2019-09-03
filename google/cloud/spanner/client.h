@@ -425,7 +425,7 @@ StatusOr<CommitResult> RunTransactionWithPolicies(
     Client client, Transaction::ReadWriteOptions const& opts,
     std::function<StatusOr<Mutations>(Client, Transaction)> const& f,
     std::unique_ptr<RetryPolicy> retry_policy,
-    std::unique_ptr<BackoffPolicy> backoff_policy) ;
+    std::unique_ptr<BackoffPolicy> backoff_policy);
 
 /// The default retry policy for RunTransaction()
 std::unique_ptr<RetryPolicy> DefaultRunTransactionRetryPolicy();
@@ -438,7 +438,6 @@ StatusOr<CommitResult> RunCommitBlockWithPolicies(
     std::function<StatusOr<CommitResult>()> const& f,
     std::unique_ptr<RetryPolicy> retry_policy,
     std::unique_ptr<BackoffPolicy> backoff_policy);
-
 
 }  // namespace internal
 
@@ -507,7 +506,7 @@ class AutoRollbackTransaction {
   bool rollback_ = true;
 };
 
-AutoRollbackTransaction MakeAutoRollbackTransaction(Client c) {
+inline AutoRollbackTransaction MakeAutoRollbackTransaction(Client c) {
   return AutoRollbackTransaction(std::move(c));
 }
 

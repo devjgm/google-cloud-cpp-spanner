@@ -396,9 +396,8 @@ void DmlStandardDelete(google::cloud::spanner::Client client) {
       spanner::RunCommitBlock([&]() -> StatusOr<spanner::CommitResult> {
         auto txn = spanner::MakeAutoRollbackTransaction(client);
         auto dele = client.ExecuteSql(
-            std::move(txn),
-            spanner::SqlStatement(
-                "DELETE FROM Singers WHERE FirstName = 'Alice'"));
+            txn, spanner::SqlStatement(
+                     "DELETE FROM Singers WHERE FirstName = 'Alice'"));
         if (!dele) return dele.status();
         return client.Commit(std::move(txn));
       });

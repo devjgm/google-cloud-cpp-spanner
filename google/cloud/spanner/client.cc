@@ -132,17 +132,6 @@ std::shared_ptr<Connection> MakeConnection(Database const& db,
 
 namespace internal {
 
-std::unique_ptr<RetryPolicy> DefaultRunTransactionRetryPolicy() {
-  return LimitedTimeRetryPolicy(/*maximum_duration=*/std::chrono::minutes(10))
-      .clone();
-}
-
-std::unique_ptr<BackoffPolicy> DefaultRunTransactionBackoffPolicy() {
-  return ExponentialBackoffPolicy(std::chrono::milliseconds(100),
-                                  std::chrono::minutes(5), 2.0)
-      .clone();
-}
-
 StatusOr<CommitResult> RunCommitBlockWithPolicies(
     std::function<StatusOr<CommitResult>()> const& f,
     std::unique_ptr<RetryPolicy> retry_policy,
@@ -164,6 +153,17 @@ StatusOr<CommitResult> RunCommitBlockWithPolicies(
     std::this_thread::sleep_for(backoff_policy->OnCompletion());
   }
   return internal::RetryLoopError(reason, __func__, last_status);
+}
+
+std::unique_ptr<RetryPolicy> DefaultRunTransactionRetryPolicy() {
+  return LimitedTimeRetryPolicy(/*maximum_duration=*/std::chrono::minutes(10))
+      .clone();
+}
+
+std::unique_ptr<BackoffPolicy> DefaultRunTransactionBackoffPolicy() {
+  return ExponentialBackoffPolicy(std::chrono::milliseconds(100),
+                                  std::chrono::minutes(5), 2.0)
+      .clone();
 }
 
 }  // namespace internal

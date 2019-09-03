@@ -410,14 +410,14 @@ TEST(ClientTest, MakeConnectionOptionalArguments) {
   EXPECT_NE(conn, nullptr);
 }
 
-TEST(ClientTest, RunTransactionCommit) {
+TEST(ClientTest, RunCommitBlockSuccess) {
   auto timestamp = internal::TimestampFromString("2019-08-14T21:16:21.123Z");
   ASSERT_STATUS_OK(timestamp);
 
   auto conn = std::make_shared<MockConnection>();
-  Transaction txn = MakeReadWriteTransaction();  // dummy
-  Connection::ReadParams actual_read_params{txn, {}, {}, {}, {}};
-  Connection::CommitParams actual_commit_params{txn, {}};
+  Transaction dummy_txn = MakeReadWriteTransaction();
+  Connection::ReadParams actual_read_params{dummy_txn, {}, {}, {}, {}};
+  Connection::CommitParams actual_commit_params{dummy_txn, {}};
   EXPECT_CALL(*conn, Read(_))
       .WillOnce(
           DoAll(SaveArg<0>(&actual_read_params), Return(ByMove(ResultSet{}))));
@@ -425,15 +425,14 @@ TEST(ClientTest, RunTransactionCommit) {
       .WillOnce(DoAll(SaveArg<0>(&actual_commit_params),
                       Return(CommitResult{*timestamp})));
 
-  auto mutation = MakeDeleteMutation("table", KeySet::All());
-  auto f = [&mutation](Client client, Transaction txn) -> StatusOr<Mutations> {
-    auto read = client.Read(std::move(txn), "T", KeySet::All(), {"C"});
-    if (!read) return read.status();
-    return Mutations{mutation};
-  };
-
   Client client(conn);
-  auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
+  auto mutation = MakeDeleteMutation("table", KeySet::All());
+  auto result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
+    auto txn = MakeAutoRollbackTransaction(client);
+    auto read = client.Read(txn, "T", KeySet::All(), {"C"});
+    if (!read) return read.status();
+    return client.Commit(std::move(txn), {mutation});
+  });
   EXPECT_STATUS_OK(result);
   EXPECT_EQ(*timestamp, result->commit_timestamp);
 
@@ -443,25 +442,25 @@ TEST(ClientTest, RunTransactionCommit) {
   EXPECT_THAT(actual_commit_params.mutations, ElementsAre(mutation));
 }
 
-TEST(ClientTest, RunTransactionRollback) {
+TEST(ClientTest, RunCommitBlockRollback) {
   auto conn = std::make_shared<MockConnection>();
-  Transaction txn = MakeReadWriteTransaction();  // dummy
-  Connection::ReadParams actual_read_params{txn, {}, {}, {}, {}};
+  Transaction dummy_txn = MakeReadWriteTransaction();
+  Connection::ReadParams actual_read_params{dummy_txn, {}, {}, {}, {}};
   EXPECT_CALL(*conn, Read(_))
       .WillOnce(
           DoAll(SaveArg<0>(&actual_read_params),
                 Return(ByMove(Status(StatusCode::kInvalidArgument, "blah")))));
   EXPECT_CALL(*conn, Rollback(_)).WillOnce(Return(Status()));
 
-  auto mutation = MakeDeleteMutation("table", KeySet::All());
-  auto f = [&mutation](Client client, Transaction txn) -> StatusOr<Mutations> {
-    auto read = client.Read(std::move(txn), "T", KeySet::All(), {"C"});
-    if (!read) return read.status();
-    return Mutations{mutation};
-  };
-
   Client client(conn);
-  auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
+  auto mutation = MakeDeleteMutation("table", KeySet::All());
+  auto result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
+    auto txn = MakeAutoRollbackTransaction(client);
+    auto read = client.Read(txn, "T", KeySet::All(), {"C"});
+    if (!read) return read.status();
+    return client.Commit(std::move(txn), {mutation});
+  });
+
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(StatusCode::kInvalidArgument, result.status().code());
   EXPECT_THAT(result.status().message(), HasSubstr("blah"));
@@ -471,10 +470,10 @@ TEST(ClientTest, RunTransactionRollback) {
   EXPECT_THAT(actual_read_params.columns, ElementsAre("C"));
 }
 
-TEST(ClientTest, RunTransactionRollbackError) {
+TEST(ClientTest, RunCommitBlockRollbackError) {
   auto conn = std::make_shared<MockConnection>();
-  Transaction txn = MakeReadWriteTransaction();  // dummy
-  Connection::ReadParams actual_read_params{txn, {}, {}, {}, {}};
+  Transaction dummy_txn = MakeReadWriteTransaction();
+  Connection::ReadParams actual_read_params{dummy_txn, {}, {}, {}, {}};
   EXPECT_CALL(*conn, Read(_))
       .WillOnce(
           DoAll(SaveArg<0>(&actual_read_params),
@@ -482,15 +481,15 @@ TEST(ClientTest, RunTransactionRollbackError) {
   EXPECT_CALL(*conn, Rollback(_))
       .WillOnce(Return(Status(StatusCode::kInternal, "oops")));
 
-  auto mutation = MakeDeleteMutation("table", KeySet::All());
-  auto f = [&mutation](Client client, Transaction txn) -> StatusOr<Mutations> {
-    auto read = client.Read(std::move(txn), "T", KeySet::All(), {"C"});
-    if (!read) return read.status();
-    return Mutations{mutation};
-  };
-
   Client client(conn);
-  auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
+  auto mutation = MakeDeleteMutation("table", KeySet::All());
+  auto result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
+    auto txn = MakeAutoRollbackTransaction(client);
+    auto read = client.Read(txn, "T", KeySet::All(), {"C"});
+    if (!read) return read.status();
+    return client.Commit(std::move(txn), {mutation});
+  });
+
   EXPECT_FALSE(result.ok());
   EXPECT_EQ(StatusCode::kInvalidArgument, result.status().code());
   EXPECT_THAT(result.status().message(), HasSubstr("blah"));
@@ -500,33 +499,36 @@ TEST(ClientTest, RunTransactionRollbackError) {
   EXPECT_THAT(actual_read_params.columns, ElementsAre("C"));
 }
 
-#if GOOGLE_CLOUD_CPP_HAVE_EXCEPTIONS
-TEST(ClientTest, RunTransactionException) {
-  auto conn = std::make_shared<MockConnection>();
-  EXPECT_CALL(*conn, Read(_))
-      .WillOnce(Return(ByMove(Status(StatusCode::kInvalidArgument, "blah"))));
-  EXPECT_CALL(*conn, Rollback(_)).WillOnce(Return(Status()));
+/* #if GOOGLE_CLOUD_CPP_HAVE_EXCEPTIONS */
+/* TEST(ClientTest, RunTransactionException) { */
+/*   auto conn = std::make_shared<MockConnection>(); */
+/*   EXPECT_CALL(*conn, Read(_)) */
+/*       .WillOnce(Return(ByMove(Status(StatusCode::kInvalidArgument,
+ * "blah")))); */
+/*   EXPECT_CALL(*conn, Rollback(_)).WillOnce(Return(Status())); */
 
-  auto mutation = MakeDeleteMutation("table", KeySet::All());
-  auto f = [&mutation](Client client, Transaction txn) -> StatusOr<Mutations> {
-    auto read = client.Read(std::move(txn), "T", KeySet::All(), {"C"});
-    if (!read) throw "Read() error";
-    return Mutations{mutation};
-  };
+/*   auto mutation = MakeDeleteMutation("table", KeySet::All()); */
+/*   auto f = [&mutation](Client client, Transaction txn) -> StatusOr<Mutations>
+ * { */
+/*     auto read = client.Read(std::move(txn), "T", KeySet::All(), {"C"}); */
+/*     if (!read) throw "Read() error"; */
+/*     return Mutations{mutation}; */
+/*   }; */
 
-  try {
-    Client client(conn);
-    auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
-    FAIL();
-  } catch (char const* e) {
-    EXPECT_STREQ(e, "Read() error");
-  } catch (...) {
-    FAIL();
-  }
-}
-#endif
+/*   try { */
+/*     Client client(conn); */
+/*     auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
+ */
+/*     FAIL(); */
+/*   } catch (char const* e) { */
+/*     EXPECT_STREQ(e, "Read() error"); */
+/*   } catch (...) { */
+/*     FAIL(); */
+/*   } */
+/* } */
+/* #endif */
 
-TEST(ClientTest, RunTransaction_RetryTransientFailures) {
+TEST(ClientTest, RunCommitBlock_RetryTransientFailures) {
   auto timestamp = internal::TimestampFromString("2019-08-14T21:16:21.123Z");
   ASSERT_STATUS_OK(timestamp);
 
@@ -539,34 +541,33 @@ TEST(ClientTest, RunTransaction_RetryTransientFailures) {
         return CommitResult{*timestamp};
       }));
 
-  auto f = [](Client const&, Transaction const&) -> StatusOr<Mutations> {
-    return Mutations{MakeDeleteMutation("table", KeySet::All())};
-  };
-
   Client client(conn);
-  auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
+  auto result = RunCommitBlock([&] {
+    return client.Commit(MakeReadWriteTransaction(),
+                         {MakeDeleteMutation("table", KeySet::All())});
+  });
   EXPECT_STATUS_OK(result);
   EXPECT_EQ(*timestamp, result->commit_timestamp);
 }
 
-TEST(ClientTest, RunTransaction_TooManyFailures) {
+TEST(ClientTest, RunCommitBlock_TooManyFailures) {
   auto conn = std::make_shared<MockConnection>();
   EXPECT_CALL(*conn, Commit(_))
       .WillRepeatedly(Invoke([](Connection::CommitParams const&) {
         return Status(StatusCode::kAborted, "Aborted transaction");
       }));
 
-  auto f = [](Client const&, Transaction const&) -> StatusOr<Mutations> {
-    return Mutations{MakeDeleteMutation("table", KeySet::All())};
+  Client client(conn);
+  auto f = [&] {
+    return client.Commit(MakeReadWriteTransaction(),
+                         {MakeDeleteMutation("table", KeySet::All())});
   };
 
-  Client client(conn);
   // Use a retry policy with a limited number of errors, or this will wait for a
   // long time, also change the backoff policy to sleep for very short periods,
   // so the unit tests run faster.
-  auto result = internal::RunTransactionWithPolicies(
-      client, Transaction::ReadWriteOptions{}, f,
-      LimitedErrorCountRetryPolicy(2).clone(),
+  auto result = internal::RunCommitBlockWithPolicies(
+      f, LimitedErrorCountRetryPolicy(2).clone(),
       ExponentialBackoffPolicy(std::chrono::microseconds(10),
                                std::chrono::microseconds(10), 2.0)
           .clone());
@@ -575,19 +576,19 @@ TEST(ClientTest, RunTransaction_TooManyFailures) {
   EXPECT_THAT(result.status().message(), HasSubstr("Too many failures "));
 }
 
-TEST(ClientTest, RunTransaction_PermanentFailure) {
+TEST(ClientTest, RunCommitBlock_PermanentFailure) {
   auto conn = std::make_shared<MockConnection>();
   EXPECT_CALL(*conn, Commit(_))
       .WillOnce(Invoke([](Connection::CommitParams const&) {
         return Status(StatusCode::kPermissionDenied, "uh-oh");
       }));
 
-  auto f = [](Client const&, Transaction const&) -> StatusOr<Mutations> {
-    return Mutations{MakeDeleteMutation("table", KeySet::All())};
-  };
-
   Client client(conn);
-  auto result = RunTransaction(client, Transaction::ReadWriteOptions{}, f);
+  auto result = RunCommitBlock([&] {
+    return client.Commit(MakeReadWriteTransaction(),
+                         {MakeDeleteMutation("table", KeySet::All())});
+  });
+
   EXPECT_EQ(StatusCode::kPermissionDenied, result.status().code());
   EXPECT_THAT(result.status().message(), HasSubstr("uh-oh"));
   EXPECT_THAT(result.status().message(), HasSubstr("Permanent failure "));

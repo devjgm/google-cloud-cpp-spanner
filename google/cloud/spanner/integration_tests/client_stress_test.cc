@@ -85,15 +85,14 @@ TEST(ClientSqlStressTest, UpsertAndSelect) {
       auto action = static_cast<Action>(random_action(generator));
 
       if (action == kInsert) {
-        auto commit = spanner::RunTransaction(
-            client, {},
-            [key](Client const&,
-                  Transaction const&) -> StatusOr<spanner::Mutations> {
-              auto s = std::to_string(key);
-              return Mutations{spanner::MakeInsertOrUpdateMutation(
+        auto commit = spanner::RunCommitBlock([&] {
+          auto s = std::to_string(key);
+          return client.Commit(
+              MakeReadWriteTransaction(),
+              {spanner::MakeInsertOrUpdateMutation(
                   "Singers", {"SingerId", "FirstName", "LastName"}, key,
-                  "fname-" + s, "lname-" + s)};
-            });
+                  "fname-" + s, "lname-" + s)});
+        });
         result.Update(commit.status());
       } else {
         auto size = random_limit(generator);
@@ -157,15 +156,14 @@ TEST(ClientStressTest, UpsertAndRead) {
       auto action = static_cast<Action>(random_action(generator));
 
       if (action == kInsert) {
-        auto commit = spanner::RunTransaction(
-            client, {},
-            [key](Client const&,
-                  Transaction const&) -> StatusOr<spanner::Mutations> {
-              auto s = std::to_string(key);
-              return Mutations{spanner::MakeInsertOrUpdateMutation(
+        auto commit = spanner::RunCommitBlock([&] {
+          auto s = std::to_string(key);
+          return client.Commit(
+              MakeReadWriteTransaction(),
+              {spanner::MakeInsertOrUpdateMutation(
                   "Singers", {"SingerId", "FirstName", "LastName"}, key,
-                  "fname-" + s, "lname-" + s)};
-            });
+                  "fname-" + s, "lname-" + s)});
+        });
         result.Update(commit.status());
       } else {
         auto size = random_limit(generator);

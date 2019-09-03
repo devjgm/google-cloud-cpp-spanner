@@ -123,14 +123,13 @@ Result RunExperiment(Database const& db, int iterations) {
   int const report = iterations / 5;
   for (int i = 0; i != iterations; ++i) {
     if (i % report == 0) std::cout << '.' << std::flush;
-    auto delete_status = RunTransaction(
-        client, Transaction::ReadWriteOptions{},
-        [&](Client client, Transaction const& txn) -> StatusOr<Mutations> {
-          auto status = client.ExecuteSql(
-              txn, SqlStatement("DELETE FROM Singers WHERE true"));
-          if (!status) return std::move(status).status();
-          return Mutations{};
-        });
+    auto delete_status = RunCommitBlock([&]() -> StatusOr<CommitResult> {
+      auto txn = MakeAutoRollbackTransaction(client);
+      auto status = client.ExecuteSql(
+          txn, SqlStatement("DELETE FROM Singers WHERE true"));
+      if (!status) return std::move(status).status();
+      return client.Commit(std::move(txn));
+    });
     update_trials(delete_status.status());
   }
 

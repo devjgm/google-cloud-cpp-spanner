@@ -40,10 +40,6 @@ class ClientIntegrationTest : public ::testing::Test {
   }
 
   void SetUp() override {
-    /* auto commit_result = */
-    /*     RunTransaction(*client_, {}, [](Client const&, Transaction const&) { */
-    /*       return Mutations{MakeDeleteMutation("Singers", KeySet::All())}; */
-    /*     }); */
     auto commit_result = RunCommitBlock([] {
       return client_->Commit(MakeReadWriteTransaction(),
                              {MakeDeleteMutation("Singers", KeySet::All())});
@@ -52,14 +48,6 @@ class ClientIntegrationTest : public ::testing::Test {
   }
 
   void InsertTwoSingers() {
-    /* auto commit_result = */
-    /*     RunTransaction(*client_, {}, [](Client const&, Transaction const&) { */
-    /*       return Mutations{InsertMutationBuilder( */
-    /*                            "Singers", {"SingerId", "FirstName", "LastName"}) */
-    /*                            .EmplaceRow(1, "test-fname-1", "test-lname-1") */
-    /*                            .EmplaceRow(2, "test-fname-2", "test-lname-2") */
-    /*                            .Build()}; */
-    /*     }); */
     auto commit_result = RunCommitBlock([] {
       return client_->Commit(
           MakeReadWriteTransaction(),
@@ -109,13 +97,6 @@ TEST_F(ClientIntegrationTest, InsertAndCommit) {
 TEST_F(ClientIntegrationTest, DeleteAndCommit) {
   ASSERT_NO_FATAL_FAILURE(InsertTwoSingers());
 
-  /* auto commit_result = */
-  /*     RunTransaction(*client_, {}, [](Client const&, Transaction const&) { */
-  /*       return Mutations{ */
-  /*           MakeDeleteMutation("Singers", KeySetBuilder<Row<std::int64_t>>() */
-  /*                                             .Add(MakeRow(std::int64_t(1))) */
-  /*                                             .Build())}; */
-  /*     }); */
   auto commit_result = RunCommitBlock([] {
     return client_->Commit(
         MakeReadWriteTransaction(),
@@ -148,29 +129,8 @@ TEST_F(ClientIntegrationTest, DeleteAndCommit) {
 TEST_F(ClientIntegrationTest, MultipleInserts) {
   ASSERT_NO_FATAL_FAILURE(InsertTwoSingers());
 
-  /* auto commit_result = RunTransaction( */
-  /*     *client_, {}, */
-  /*     [](Client client, Transaction const& txn) -> StatusOr<Mutations> { */
-  /*       auto insert1 = client.ExecuteSql( */
-  /*           txn, */
-  /*           SqlStatement("INSERT INTO Singers (SingerId, FirstName, LastName) " */
-  /*                        "VALUES (@id, @fname, @lname)", */
-  /*                        {{"id", Value(3)}, */
-  /*                         {"fname", Value("test-fname-3")}, */
-  /*                         {"lname", Value("test-lname-3")}})); */
-  /*       if (!insert1) return std::move(insert1).status(); */
-  /*       auto insert2 = client.ExecuteSql( */
-  /*           txn, */
-  /*           SqlStatement("INSERT INTO Singers (SingerId, FirstName, LastName) " */
-  /*                        "VALUES (@id, @fname, @lname)", */
-  /*                        {{"id", Value(4)}, */
-  /*                         {"fname", Value("test-fname-4")}, */
-  /*                         {"lname", Value("test-lname-4")}})); */
-  /*       if (!insert2) return std::move(insert2).status(); */
-  /*       return Mutations{}; */
-  /*     }); */
   auto commit_result = RunCommitBlock([]() -> StatusOr<CommitResult> {
-    auto txn = MakeReadWriteTransaction();
+    auto txn = MakeAutoRollbackTransaction(*client_);
     auto insert1 = client_->ExecuteSql(
         txn, SqlStatement("INSERT INTO Singers (SingerId, FirstName, LastName) "
                           "VALUES (@id, @fname, @lname)",
@@ -185,7 +145,7 @@ TEST_F(ClientIntegrationTest, MultipleInserts) {
                            {"fname", Value("test-fname-4")},
                            {"lname", Value("test-lname-4")}}));
     if (!insert2) return std::move(insert2).status();
-    return client_->Commit(txn);
+    return client_->Commit(std::move(txn));
   });
   EXPECT_STATUS_OK(commit_result);
 
@@ -296,14 +256,13 @@ TEST_F(ClientIntegrationTest, RunTransaction) {
     isb.AddRow(MakeRow(199, "first-name-199", "last-name-199"));
     return client_->Commit(MakeReadWriteTransaction(), {isb.Build()});
   };
-  /* auto insert_result = RunTransaction(*client_, {}, inserter); */
   auto insert_result = RunCommitBlock(inserter);
 
   EXPECT_STATUS_OK(insert_result);
   EXPECT_NE(Timestamp{}, insert_result->commit_timestamp);
 
   // Delete SingerId 102.
-  auto deleter = []{
+  auto deleter = [] {
     auto ksb = KeySetBuilder<Row<std::int64_t>>().Add(MakeRow(102));
     auto mutation = MakeDeleteMutation("Singers", ksb.Build());
     return client_->Commit(MakeReadWriteTransaction(), {mutation});
@@ -329,20 +288,8 @@ TEST_F(ClientIntegrationTest, RunTransaction) {
 
 /// @test Test various forms of ExecuteSql()
 TEST_F(ClientIntegrationTest, ExecuteSql) {
-  /* auto insert_result = RunTransaction( */
-  /*     *client_, {}, [](Client client, Transaction txn) -> StatusOr<Mutations> { */
-  /*       auto insert = client.ExecuteSql( */
-  /*           std::move(txn), SqlStatement(R"sql( */
-  /*       INSERT INTO Singers (SingerId, FirstName, LastName) */
-  /*       VALUES (@id, @fname, @lname))sql", */
-  /*                                        {{"id", Value(1)}, */
-  /*                                         {"fname", Value("test-fname-1")}, */
-  /*                                         {"lname", Value("test-lname-1")}})); */
-  /*       if (!insert) return std::move(insert).status(); */
-  /*       return Mutations{}; */
-  /*     }); */
   auto insert_result = RunCommitBlock([]() -> StatusOr<CommitResult> {
-    auto txn = MakeReadWriteTransaction();
+    auto txn = MakeAutoRollbackTransaction(*client_);
     auto insert = client_->ExecuteSql(
         txn, SqlStatement(R"sql(
         INSERT INTO Singers (SingerId, FirstName, LastName)
@@ -351,42 +298,15 @@ TEST_F(ClientIntegrationTest, ExecuteSql) {
                            {"fname", Value("test-fname-1")},
                            {"lname", Value("test-lname-1")}}));
     if (!insert) return std::move(insert).status();
-    return client_->Commit(txn);
+    return client_->Commit(std::move(txn));
   });
   EXPECT_STATUS_OK(insert_result);
 
   using RowType = Row<std::int64_t, std::string, std::string>;
   std::vector<RowType> expected_rows;
-  /* auto commit_result = RunTransaction( */
-  /*     *client_, {}, */
-  /*     [&expected_rows](Client client, */
-  /*                      Transaction const& txn) -> StatusOr<Mutations> { */
-  /*       expected_rows.clear(); */
-  /*       for (int i = 2; i != 10; ++i) { */
-  /*         auto s = std::to_string(i); */
-  /*         auto insert = client.ExecuteSql( */
-  /*             txn, SqlStatement(R"sql( */
-  /*       INSERT INTO Singers (SingerId, FirstName, LastName) */
-  /*       VALUES (@id, @fname, @lname))sql", */
-  /*                               {{"id", Value(i)}, */
-  /*                                {"fname", Value("test-fname-" + s)}, */
-  /*                                {"lname", Value("test-lname-" + s)}})); */
-  /*         if (!insert) return std::move(insert).status(); */
-  /*         expected_rows.push_back( */
-  /*             MakeRow(i, "test-fname-" + s, "test-lname-" + s)); */
-  /*       } */
-
-  /*       auto delete_result = */
-  /*           client.ExecuteSql(txn, SqlStatement(R"sql( */
-  /*       DELETE FROM Singers WHERE SingerId = @id)sql", */
-  /*                                               {{"id", Value(1)}})); */
-  /*       if (!delete_result) return std::move(delete_result).status(); */
-
-  /*       return Mutations{}; */
-  /*     }); */
   auto commit_result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
     expected_rows.clear();
-    auto txn = MakeReadWriteTransaction();
+    auto txn = MakeAutoRollbackTransaction(*client_);
     for (int i = 2; i != 10; ++i) {
       auto s = std::to_string(i);
       auto insert = client_->ExecuteSql(
@@ -406,7 +326,7 @@ TEST_F(ClientIntegrationTest, ExecuteSql) {
                                               {{"id", Value(1)}}));
     if (!delete_result) return std::move(delete_result).status();
 
-    return client_->Commit(txn);
+    return client_->Commit(std::move(txn));
   });
   ASSERT_STATUS_OK(commit_result);
 
@@ -455,21 +375,19 @@ void CheckReadWithOptions(
         options_generator) {
   using RowType = Row<std::int64_t, std::string, std::string>;
   std::vector<RowType> expected_rows;
-  auto commit = RunTransaction(
-      client, Transaction::ReadWriteOptions{},
-      [&expected_rows](Client const&,
-                       Transaction const&) -> StatusOr<Mutations> {
-        expected_rows.clear();
-        InsertMutationBuilder insert("Singers",
-                                     {"SingerId", "FirstName", "LastName"});
-        for (int i = 1; i != 10; ++i) {
-          auto s = std::to_string(i);
-          auto row = MakeRow(i, "test-fname-" + s, "test-lname-" + s);
-          insert.AddRow(row);
-          expected_rows.push_back(row);
-        }
-        return Mutations{std::move(insert).Build()};
-      });
+  auto commit = RunCommitBlock([&] {
+    expected_rows.clear();
+    InsertMutationBuilder insert("Singers",
+                                 {"SingerId", "FirstName", "LastName"});
+    for (int i = 1; i != 10; ++i) {
+      auto s = std::to_string(i);
+      auto row = MakeRow(i, "test-fname-" + s, "test-lname-" + s);
+      insert.AddRow(row);
+      expected_rows.push_back(row);
+    }
+    return client.Commit(MakeReadWriteTransaction(),
+                         {std::move(insert).Build()});
+  });
   ASSERT_STATUS_OK(commit);
 
   auto reader =
@@ -536,20 +454,18 @@ void CheckExecuteSqlWithSingleUseOptions(
         options_generator) {
   using RowType = Row<std::int64_t, std::string, std::string>;
   std::vector<RowType> expected_rows;
-  auto commit = RunTransaction(
-      client, Transaction::ReadWriteOptions{},
-      [&expected_rows](Client const&,
-                       Transaction const&) -> StatusOr<Mutations> {
-        InsertMutationBuilder insert("Singers",
-                                     {"SingerId", "FirstName", "LastName"});
-        for (int i = 1; i != 10; ++i) {
-          auto s = std::to_string(i);
-          auto row = MakeRow(i, "test-fname-" + s, "test-lname-" + s);
-          insert.AddRow(row);
-          expected_rows.push_back(row);
-        }
-        return Mutations{std::move(insert).Build()};
-      });
+  auto commit = RunCommitBlock([&] {
+    InsertMutationBuilder insert("Singers",
+                                 {"SingerId", "FirstName", "LastName"});
+    for (int i = 1; i != 10; ++i) {
+      auto s = std::to_string(i);
+      auto row = MakeRow(i, "test-fname-" + s, "test-lname-" + s);
+      insert.AddRow(row);
+      expected_rows.push_back(row);
+    }
+    return client.Commit(MakeReadWriteTransaction(),
+                         {std::move(insert).Build()});
+  });
   ASSERT_STATUS_OK(commit);
 
   auto reader = client.ExecuteSql(
@@ -613,23 +529,21 @@ TEST_F(ClientIntegrationTest, ExecuteSql_ExactStaleness_Duration) {
 }
 
 StatusOr<std::vector<Row<std::int64_t, std::string, std::string>>>
-AddSingerDataToTable(Client const& client) {
+AddSingerDataToTable(Client client) {
   std::vector<Row<std::int64_t, std::string, std::string>> expected_rows;
-  auto commit = RunTransaction(
-      client, Transaction::ReadWriteOptions{},
-      [&expected_rows](Client const&,
-                       Transaction const&) -> StatusOr<Mutations> {
-        expected_rows.clear();
-        InsertMutationBuilder insert("Singers",
-                                     {"SingerId", "FirstName", "LastName"});
-        for (int i = 1; i != 10; ++i) {
-          auto s = std::to_string(i);
-          auto row = MakeRow(i, "test-fname-" + s, "test-lname-" + s);
-          insert.AddRow(row);
-          expected_rows.push_back(row);
-        }
-        return Mutations{std::move(insert).Build()};
-      });
+  auto commit = RunCommitBlock([&] {
+    expected_rows.clear();
+    InsertMutationBuilder insert("Singers",
+                                 {"SingerId", "FirstName", "LastName"});
+    for (int i = 1; i != 10; ++i) {
+      auto s = std::to_string(i);
+      auto row = MakeRow(i, "test-fname-" + s, "test-lname-" + s);
+      insert.AddRow(row);
+      expected_rows.push_back(row);
+    }
+    return client.Commit(MakeReadWriteTransaction(),
+                         {std::move(insert).Build()});
+  });
   if (!commit.ok()) {
     return commit.status();
   }
@@ -726,11 +640,11 @@ TEST_F(ClientIntegrationTest, ExecuteBatchDml) {
 
   StatusOr<BatchDmlResult> batch_result;
   auto commit_result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
-    auto txn = MakeReadWriteTransaction();
+    auto txn = MakeAutoRollbackTransaction(*client_);
     batch_result = client_->ExecuteBatchDml(txn, statements);
     if (!batch_result) return batch_result.status();
     if (!batch_result->status.ok()) return batch_result->status;
-    return client_->Commit(txn);
+    return client_->Commit(std::move(txn));
   });
 
   ASSERT_STATUS_OK(commit_result);
@@ -789,14 +703,14 @@ TEST_F(ClientIntegrationTest, ExecuteBatchDmlMany) {
   StatusOr<BatchDmlResult> batch_result_left;
   StatusOr<BatchDmlResult> batch_result_right;
   auto commit_result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
-    auto txn = MakeReadWriteTransaction();
+    auto txn = MakeAutoRollbackTransaction(*client_);
     batch_result_left = client_->ExecuteBatchDml(txn, left);
     if (!batch_result_left) return batch_result_left.status();
     if (!batch_result_left->status.ok()) return batch_result_left->status;
     batch_result_right = client_->ExecuteBatchDml(txn, right);
     if (!batch_result_right) return batch_result_right.status();
     if (!batch_result_right->status.ok()) return batch_result_right->status;
-    return client_->Commit(txn);
+    return client_->Commit(std::move(txn));
   });
 
   ASSERT_STATUS_OK(commit_result);
@@ -848,11 +762,11 @@ TEST_F(ClientIntegrationTest, ExecuteBatchDmlFailure) {
 
   StatusOr<BatchDmlResult> batch_result;
   auto commit_result = RunCommitBlock([&]() -> StatusOr<CommitResult> {
-    auto txn = MakeReadWriteTransaction();
+    auto txn = MakeAutoRollbackTransaction(*client_);
     batch_result = client_->ExecuteBatchDml(txn, statements);
     if (!batch_result) return batch_result.status();
     if (!batch_result->status.ok()) return batch_result->status;
-    return client_->Commit(txn);
+    return client_->Commit(std::move(txn));
   });
 
   ASSERT_FALSE(commit_result.ok());

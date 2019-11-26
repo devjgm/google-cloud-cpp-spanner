@@ -16,6 +16,7 @@
 #include "google/cloud/spanner/internal/logging_spanner_stub.h"
 #include "google/cloud/spanner/internal/metadata_spanner_stub.h"
 #include "google/cloud/grpc_utils/grpc_error_delegate.h"
+#include "google/cloud/internal/getenv.h"
 #include "google/cloud/log.h"
 #include <google/spanner/v1/spanner.grpc.pb.h>
 
@@ -258,14 +259,22 @@ StatusOr<spanner_proto::PartitionResponse> DefaultSpannerStub::PartitionRead(
 
 std::shared_ptr<SpannerStub> CreateDefaultSpannerStub(
     ConnectionOptions const& options, int channel_id) {
+  auto endpoint = options.endpoint();
+  auto credentials = options.credentials();
+
+  auto emulator = google::cloud::internal::GetEnv("SPANNER_EMULATOR_HOST");
+  if (emulator) {
+    endpoint = *emulator;
+    credentials = grpc::InsecureChannelCredentials();
+  }
+
   grpc::ChannelArguments channel_arguments = options.CreateChannelArguments();
   // Newer versions of gRPC include a macro (`GRPC_ARG_CHANNEL_ID`) but use
   // its value here to allow compiling against older versions.
   channel_arguments.SetInt("grpc.channel_id", channel_id);
 
-  auto spanner_grpc_stub =
-      spanner_proto::Spanner::NewStub(grpc::CreateCustomChannel(
-          options.endpoint(), options.credentials(), channel_arguments));
+  auto spanner_grpc_stub = spanner_proto::Spanner::NewStub(
+      grpc::CreateCustomChannel(endpoint, credentials, channel_arguments));
 
   std::shared_ptr<SpannerStub> stub =
       std::make_shared<DefaultSpannerStub>(std::move(spanner_grpc_stub));

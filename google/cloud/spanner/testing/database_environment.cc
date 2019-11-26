@@ -13,7 +13,9 @@
 // limitations under the License.
 
 #include "google/cloud/spanner/testing/database_environment.h"
+#include "google/cloud/spanner/create_instance_request_builder.h"
 #include "google/cloud/spanner/database_admin_client.h"
+#include "google/cloud/spanner/instance_admin_client.h"
 #include "google/cloud/spanner/testing/pick_random_instance.h"
 #include "google/cloud/spanner/testing/random_database_name.h"
 #include "google/cloud/internal/getenv.h"
@@ -28,6 +30,20 @@ google::cloud::spanner::Database* DatabaseEnvironment::db_;
 google::cloud::internal::DefaultPRNG* DatabaseEnvironment::generator_;
 
 void DatabaseEnvironment::SetUp() {
+  std::cerr << "## creating instance\n";
+  google::cloud::spanner::InstanceAdminClient instance_client(
+      google::cloud::spanner::MakeInstanceAdminConnection());
+
+  spanner::Instance inst("jgm-cloud-cxx", "test-instance-integration");
+  future<StatusOr<google::spanner::admin::instance::v1::Instance>> f =
+      instance_client.CreateInstance(
+          google::cloud::spanner::CreateInstanceRequestBuilder(inst, "")
+              .Build());
+  auto in = f.get();
+  if (!in) {
+    throw std::runtime_error(in.status().message());
+  }
+
   auto project_id =
       google::cloud::internal::GetEnv("GOOGLE_CLOUD_PROJECT").value_or("");
   ASSERT_FALSE(project_id.empty());

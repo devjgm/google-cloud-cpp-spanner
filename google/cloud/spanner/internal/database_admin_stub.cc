@@ -16,6 +16,7 @@
 #include "google/cloud/spanner/internal/database_admin_logging.h"
 #include "google/cloud/spanner/internal/database_admin_metadata.h"
 #include "google/cloud/grpc_utils/grpc_error_delegate.h"
+#include "google/cloud/internal/getenv.h"
 #include "google/cloud/log.h"
 #include <google/longrunning/operations.grpc.pb.h>
 
@@ -166,9 +167,17 @@ class DefaultDatabaseAdminStub : public DatabaseAdminStub {
 
 std::shared_ptr<DatabaseAdminStub> CreateDefaultDatabaseAdminStub(
     ConnectionOptions const& options) {
-  auto channel =
-      grpc::CreateCustomChannel(options.endpoint(), options.credentials(),
-                                options.CreateChannelArguments());
+  auto endpoint = options.endpoint();
+  auto credentials = options.credentials();
+
+  auto emulator = google::cloud::internal::GetEnv("SPANNER_EMULATOR_HOST");
+  if (emulator) {
+    endpoint = *emulator;
+    credentials = grpc::InsecureChannelCredentials();
+  }
+
+  auto channel = grpc::CreateCustomChannel(endpoint, credentials,
+                                           options.CreateChannelArguments());
   auto spanner_grpc_stub = gcsa::DatabaseAdmin::NewStub(channel);
   auto longrunning_grpc_stub =
       google::longrunning::Operations::NewStub(channel);
